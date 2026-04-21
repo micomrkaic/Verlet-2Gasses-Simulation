@@ -111,37 +111,109 @@ acceleration** heats the gas permanently — this is real physics, not a bug.
 
 ### Dependencies
 
-- **SDL2** — display and input
-- **ffmpeg** — video export (optional; only needed for recording)
+#### Required
+
+| Dependency | Purpose | Minimum version |
+|------------|---------|-----------------|
+| **GCC or Clang** | C compiler | GCC 7 / Clang 6 (C11 support required) |
+| **GNU Make** | Build system | Any recent version |
+| **SDL2** | Window, renderer, input | 2.0.5+ |
+| **libm** | Math library (`-lm`) | Bundled with glibc / system libc |
+
+#### Optional
+
+| Dependency | Purpose |
+|------------|---------|
+| **ffmpeg** | Video export — press `V` to record. Must be on your `PATH`. If absent, pressing `V` prints a warning and recording is silently skipped; the simulation continues normally. |
+| **pkg-config** | Used by the Makefile to auto-detect SDL2 flags on Linux. If missing, the Makefile falls back to `-I/usr/include/SDL2 -lSDL2`. |
+
+---
+
+### Installing dependencies
+
+#### Ubuntu / Debian
 
 ```bash
-# Linux
-apt install libsdl2-dev ffmpeg
+# Build tools
+sudo apt install build-essential pkg-config
 
-# macOS (Homebrew)
-brew install sdl2 ffmpeg
+# SDL2 (runtime + development headers)
+sudo apt install libsdl2-dev
+
+# ffmpeg (optional — for video recording)
+sudo apt install ffmpeg
 ```
 
-### Linux
+#### Fedora / RHEL / CentOS
 
+```bash
+sudo dnf install gcc make pkgconf-pkg-config SDL2-devel
+
+# ffmpeg (optional — may require RPM Fusion repo)
+sudo dnf install ffmpeg
+```
+
+#### Arch Linux
+
+```bash
+sudo pacman -S base-devel sdl2
+
+# ffmpeg (optional)
+sudo pacman -S ffmpeg
+```
+
+#### macOS (Homebrew)
+
+```bash
+# Install Homebrew if needed: https://brew.sh
+brew install sdl2
+
+# ffmpeg (optional)
+brew install ffmpeg
+```
+
+Xcode Command Line Tools provide `gcc` (Clang) and `make`:
+
+```bash
+xcode-select --install
+```
+
+---
+
+### Building
+
+A `Makefile` is included. From the project directory:
+
+```bash
+make          # compile → ./ballsim
+make run      # compile and launch immediately
+make clean    # remove the binary
+```
+
+The Makefile auto-detects the platform and SDL2 paths via `pkg-config` on
+Linux or Homebrew paths on macOS. No manual flag editing is needed in the
+normal case.
+
+#### Manual build (if make is unavailable)
+
+Linux:
 ```bash
 gcc -O2 -std=c11 -Wall -Wextra -Wno-unused-parameter \
-    -I/usr/include/SDL2 -D_REENTRANT \
-    -o ballsim main_collisions_sliders.c -lSDL2 -lm
+    $(pkg-config --cflags --libs sdl2) \
+    -o ballsim verlet_collisions_two_gasses_video.c -lm
 ```
 
-### macOS (Homebrew SDL2)
-
+macOS (Apple Silicon):
 ```bash
 gcc -O2 -std=c11 \
     -I/opt/homebrew/include/SDL2 -L/opt/homebrew/lib \
-    -o ballsim main_collisions_sliders.c -lSDL2 -lm
+    -o ballsim verlet_collisions_two_gasses_video.c -lSDL2 -lm
 ```
 
-Intel Macs: replace `/opt/homebrew` with `/usr/local`.
+Intel Mac: replace `/opt/homebrew` with `/usr/local`.
 
-> The source uses `#include <SDL2/SDL.h>`. Change to `#include <SDL.h>` if
-> your setup uses the flat include path.
+> **Include path note:** the source uses `#include <SDL2/SDL.h>`. If your
+> SDL2 installation uses a flat include path, change it to `#include <SDL.h>`.
 
 ---
 
@@ -279,10 +351,12 @@ not simulation time, so the recorded video plays back at exactly the same speed
 you see on screen — independent of monitor refresh rate or CPU load.
 
 **Requirements:** `ffmpeg` must be on your `PATH`. Frames are piped directly
-into ffmpeg as raw RGB24 — no temporary files are written.
+into ffmpeg as raw RGB24 — no temporary files are written. If ffmpeg is not
+installed or cannot be found, pressing `V` prints a warning to stderr and
+recording is skipped — the simulation keeps running normally.
 
 ```bash
-# Check ffmpeg is available
+# Verify ffmpeg is available and on PATH
 ffmpeg -version
 ```
 
