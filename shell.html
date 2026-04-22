@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Parabolic Vessel — Hard Sphere Gas</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background: #080a10;
+      color: #99aabb;
+      font-family: 'Courier New', Courier, monospace;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      min-height: 100dvh;
+      padding: 16px 8px;
+      gap: 12px;
+    }
+
+    h1 {
+      font-size: 14px;
+      letter-spacing: 0.12em;
+      color: #667799;
+      text-transform: uppercase;
+    }
+
+    #canvas-wrap {
+      position: relative;
+      border: 1px solid #1e2a40;
+      box-shadow: 0 0 40px #0a1020;
+      line-height: 0;  /* prevent gap below canvas */
+    }
+
+    canvas {
+      display: block;
+      image-rendering: pixelated;
+    }
+
+    /* Emscripten sets canvas#canvas by default */
+    #canvas { cursor: default; }
+
+    #status-bar {
+      font-size: 11px;
+      color: #445566;
+      letter-spacing: 0.08em;
+      height: 16px;
+    }
+
+    #status-bar.error { color: #cc4444; }
+
+    /* Loading overlay — fades out once the sim starts */
+    #loading {
+      position: absolute;
+      inset: 0;
+      background: #0d0f1a;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 20px;
+      transition: opacity 0.4s;
+    }
+
+    #loading.hidden { opacity: 0; pointer-events: none; }
+
+    .spinner {
+      width: 36px; height: 36px;
+      border: 3px solid #1e2a40;
+      border-top-color: #4488cc;
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
+
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    .loading-text {
+      font-size: 12px;
+      color: #556677;
+      letter-spacing: 0.1em;
+    }
+
+    .hint-row {
+      font-size: 11px;
+      color: #334455;
+      letter-spacing: 0.06em;
+    }
+
+    .hint-row kbd {
+      background: #1a2030;
+      border: 1px solid #2a3a50;
+      border-radius: 3px;
+      padding: 1px 5px;
+      font-family: inherit;
+      font-size: 11px;
+      color: #8899aa;
+    }
+  </style>
+</head>
+<body>
+  <h1>Parabolic Vessel &mdash; Hard Sphere Gas</h1>
+
+  <div id="canvas-wrap">
+    <canvas id="canvas" oncontextmenu="event.preventDefault()"></canvas>
+    <div id="loading">
+      <div class="spinner"></div>
+      <div class="loading-text">LOADING SIMULATION&hellip;</div>
+    </div>
+  </div>
+
+  <div id="status-bar">INITIALISING&hellip;</div>
+
+  <div class="hint-row">
+    <kbd>R</kbd> random reset &nbsp;
+    <kbd>M</kbd> monoenergetic reset &nbsp;
+    <kbd>+</kbd> / <kbd>&minus;</kbd> add / remove particles &nbsp;
+    &nbsp;&mdash;&nbsp; drag sliders in the panel on the right
+  </div>
+
+  <!-- Declare Module.canvas BEFORE Emscripten's JS is injected below.     -->
+  <!-- If this is missing, GL.createContext crashes with:                   -->
+  <!-- "Cannot read properties of undefined (reading               -->
+  <!--  'getContextSafariWebGL2Fixed')"                                      -->
+  <script>
+    var Module = {
+      canvas: document.getElementById('canvas'),
+      setStatus: function(text) {
+        var statusEl = document.getElementById('status-bar');
+        var loading  = document.getElementById('loading');
+        if (statusEl) statusEl.textContent = text || 'RUNNING';
+        if (!text && loading) loading.classList.add('hidden');
+      },
+      onRuntimeInitialized: function() {
+        var loading = document.getElementById('loading');
+        if (loading) loading.classList.add('hidden');
+        var statusEl = document.getElementById('status-bar');
+        if (statusEl) statusEl.textContent = 'RUNNING';
+      },
+      printErr: function(text) { console.warn('[ballsim]', text); }
+    };
+  </script>
+
+  {{{ SCRIPT }}}
+
+  <script>
+    // Nothing needed here — Module was fully set up above.
+</body>
+</html>

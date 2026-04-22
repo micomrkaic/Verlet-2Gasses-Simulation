@@ -1,0 +1,44 @@
+CC      = emcc
+SRC     = ballsim_wasm.c
+TARGET  = ballsim.html   # local dev: also emits ballsim.js + ballsim.wasm
+
+# ── Emscripten flags ──────────────────────────────────────────────────────────
+EMFLAGS = \
+	-s USE_SDL=2 \
+	-s ALLOW_MEMORY_GROWTH=1 \
+	-s INITIAL_MEMORY=67108864 \
+	-s EXIT_RUNTIME=0
+
+CFLAGS  = -O2 -std=c11 -Wall -Wextra -Wno-unused-parameter $(EMFLAGS)
+
+.PHONY: all clean serve pages native
+
+# ── Local dev build ───────────────────────────────────────────────────────────
+all: $(TARGET)
+
+$(TARGET): $(SRC) shell.html
+	$(CC) $(CFLAGS) -o $@ $(SRC) -lm
+	@echo "Built. Run:  python3 -m http.server 8080"
+
+serve: all
+	python3 -m http.server 8080
+
+# ── GitHub Pages build ────────────────────────────────────────────────────────
+# Outputs to dist/ as index.html + index.js + index.wasm so Pages serves
+# the simulation at the repo's root URL with no redirects needed.
+pages: $(SRC) shell.html
+	mkdir -p dist
+	$(CC) $(CFLAGS) -o dist/index.html $(SRC) -lm
+	@echo "Pages build ready in dist/"
+
+# ── Native build (unchanged workflow) ────────────────────────────────────────
+native: $(SRC)
+	gcc -O2 -std=c11 -Wall -Wextra -Wno-unused-parameter \
+	    $$(pkg-config --cflags sdl2 2>/dev/null || echo -I/usr/include/SDL2) \
+	    -o ballsim $(SRC) \
+	    $$(pkg-config --libs sdl2 2>/dev/null || echo -lSDL2) -lm
+	@echo "Built native: ./ballsim"
+
+clean:
+	rm -f ballsim.html ballsim.js ballsim.wasm
+	rm -rf dist/
