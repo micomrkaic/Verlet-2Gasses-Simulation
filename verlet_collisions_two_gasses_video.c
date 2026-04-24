@@ -1,6 +1,5 @@
 #include <SDL2/SDL.h>
 #include <math.h>
-#include <signal.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -290,12 +289,7 @@ static void capture_frame(SDL_Renderer *rend, int win_w, int win_h) {
   if (now < rec_wall_next) return;
   SDL_RenderReadPixels(rend, NULL, SDL_PIXELFORMAT_RGB24,
                        rec_pixels, win_w * 3);
-  size_t written = fwrite(rec_pixels, 1, (size_t)win_w * win_h * 3, rec_pipe);
-  if (written < (size_t)win_w * win_h * 3) {
-    fprintf(stderr, "Record: pipe broke — is ffmpeg installed?\n");
-    record_stop();
-    return;
-  }
+  fwrite(rec_pixels, 1, (size_t)win_w * win_h * 3, rec_pipe);
   rec_frames++;
   // Advance by exactly one frame interval, not by (now - rec_wall_next),
   // so jitter doesn't accumulate — any late frames shift the whole schedule.
@@ -1316,9 +1310,6 @@ static void draw_panel(SDL_Renderer *rend, int n, double total_e, double ke,
 // ── Main
 // ──────────────────────────────────────────────────────────────────────
 int main(int argc, char **argv) {
-#ifndef _WIN32
-  signal(SIGPIPE, SIG_IGN);  // prevent fwrite-to-dead-ffmpeg-pipe from killing us
-#endif
   // Parse --config <file> or --write-config <file>
   const char *config_path = "ballsim.cfg";
   for (int i = 1; i < argc; i++) {
