@@ -231,7 +231,8 @@ typedef struct {
     double mass;
     double radius;
     int    species; // 0 = light, 1 = heavy
-    Uint8  r, g, b;
+    Uint8  r, g, b; // species colors (used in SPECIES mode)
+    double hue;     // [0,360) — used in RAINBOW mode
 } Particle;
 
 static Particle p[MAX_PARTICLES];
@@ -248,6 +249,71 @@ static double species_ke[2] = {0, 0};
 static int    species_n[2]  = {0, 0};
 
 static double randf(void) { return (double)rand() / ((double)RAND_MAX + 1.0); }
+
+// ── Color cycling ─────────────────────────────────────────────────────────────
+#define N_COLOR_MODES 5
+static int color_mode = 0;
+static const char *color_mode_names[N_COLOR_MODES] = {
+    "SPECIES", "SPEED", "KE", "HEIGHT", "RAINBOW"
+};
+
+// HSV → RGB  (h in [0,360), s and v in [0,1])
+static void hsv_to_rgb(double h, double s, double v,
+                        Uint8 *r, Uint8 *g, Uint8 *b) {
+    if (s < 1e-9) { *r = *g = *b = (Uint8)(v*255); return; }
+    int    i  = (int)(h / 60.0) % 6;
+    double f  = h / 60.0 - floor(h / 60.0);
+    double p  = v * (1.0 - s);
+    double q  = v * (1.0 - f * s);
+    double t  = v * (1.0 - (1.0 - f) * s);
+    double rv, gv, bv;
+    switch (i) {
+        case 0: rv=v; gv=t; bv=p; break;
+        case 1: rv=q; gv=v; bv=p; break;
+        case 2: rv=p; gv=v; bv=t; break;
+        case 3: rv=p; gv=q; bv=v; break;
+        case 4: rv=t; gv=p; bv=v; break;
+        default: rv=v; gv=p; bv=q; break;
+    }
+    *r = (Uint8)(rv*255); *g = (Uint8)(gv*255); *b = (Uint8)(bv*255);
+}
+
+// Compute display color for particle i given current color_mode.
+// max_val: frame-level max speed (SPEED) or max KE (KE), used for normalisation.
+static void particle_rgb(int i, double max_val,
+                          Uint8 *r, Uint8 *g, Uint8 *b) {
+    switch (color_mode) {
+    case 0: // SPECIES — stored at init
+        *r = p[i].r; *g = p[i].g; *b = p[i].b;
+        break;
+    case 1: { // SPEED — blue=slow, red=fast
+        double speed = sqrt(p[i].vx*p[i].vx + p[i].vy*p[i].vy);
+        double t     = (max_val > 0) ? speed / max_val : 0.0;
+        if (t > 1) t = 1;
+        hsv_to_rgb(240.0 * (1.0 - t), 1.0, 1.0, r, g, b);
+        break;
+    }
+    case 2: { // KE — blue=cold, red=hot
+        double ke = 0.5 * p[i].mass * (p[i].vx*p[i].vx + p[i].vy*p[i].vy);
+        double t  = (max_val > 0) ? ke / max_val : 0.0;
+        if (t > 1) t = 1;
+        hsv_to_rgb(240.0 * (1.0 - t), 1.0, 1.0, r, g, b);
+        break;
+    }
+    case 3: { // HEIGHT — rainbow by y position (red=top, blue=bottom)
+        double t = p[i].y / cfg.sim_h;
+        if (t < 0) t = 0;
+        if (t > 1) t = 1;
+        hsv_to_rgb(t * 300.0, 1.0, 1.0, r, g, b);
+        break;
+    }
+    case 4: // RAINBOW — fixed hue assigned at init
+        hsv_to_rgb(p[i].hue, 1.0, 1.0, r, g, b);
+        break;
+    default:
+        *r = p[i].r; *g = p[i].g; *b = p[i].b;
+    }
+}
 
 // ── Maxwell-Boltzmann curve (2D: f(KE) = exp(-KE/kT)) ───────────────────────
 static void compute_mb_curve(double mean_ke) {
@@ -289,6 +355,7 @@ static void init_particles(int n, bool monoenergetic) {
             p[i].g = (Uint8)(190 * br);
             p[i].b = (Uint8)(255 * br);
         }
+        p[i].hue = randf() * 360.0;
     }
     // Grid placement
     double gap    = 2.0;
@@ -835,6 +902,10 @@ static void draw_panel(SDL_Renderer *rend, int n, double total_e,
     ty = draw_stat(rend,px,ty,"PARTICLES",buf,0xFF,0xFF,0xFF);
     ty += 4;
 
+    ty = draw_stat(rend,px,ty,"COLOR MODE  (C)",
+                   color_mode_names[color_mode],0xFF,0xDD,0xFF);
+    ty += 4;
+
     snprintf(buf,sizeof(buf),"%.4f",(eng_e0>0)?total_e/eng_e0:1.0);
     ty = draw_stat(rend,px,ty,"TOTAL ENERGY (E/E0)",buf,0xFF,0xCC,0x44);
     ty += 4;
@@ -991,7 +1062,7 @@ static void draw_panel(SDL_Renderer *rend, int n, double total_e,
     ds(rend, omp_buf, px, cfg.sim_h-24, 1, 0x33, 0x66, 0x44);
 #endif
 
-    ds(rend, "R-RAND  M-MONO  V-REC  Q-QUIT",
+    ds(rend, "R-RAND  M-MONO  C-COLOR  V-REC  Q-QUIT",
        px, cfg.sim_h-14, 1, 0x55, 0x66, 0x88);
 }
 
@@ -1083,6 +1154,9 @@ int main(int argc, char **argv) {
                     if (!rec_active) { record_start(CFG_WIN_W,cfg.sim_h); rec_blink=SDL_GetTicks(); }
                     else record_stop();
                     break;
+                case SDLK_c:
+                    color_mode = (color_mode + 1) % N_COLOR_MODES;
+                    break;
                 }
         }
 
@@ -1106,8 +1180,26 @@ int main(int argc, char **argv) {
 
         SDL_SetRenderDrawColor(rend, 0x0D, 0x0F, 0x1A, 0xFF);
         SDL_RenderClear(rend);
-        for (int i = 0; i < n; i++)
-            draw_particle(rend, p[i].x, p[i].y, p[i].radius, p[i].r, p[i].g, p[i].b);
+
+        // Pre-compute normalisation for speed/KE color modes
+        double max_val = 1.0;
+        if (color_mode == 1) {
+            for (int i = 0; i < n; i++) {
+                double s = sqrt(p[i].vx*p[i].vx + p[i].vy*p[i].vy);
+                if (s > max_val) max_val = s;
+            }
+        } else if (color_mode == 2) {
+            for (int i = 0; i < n; i++) {
+                double ke = 0.5*p[i].mass*(p[i].vx*p[i].vx + p[i].vy*p[i].vy);
+                if (ke > max_val) max_val = ke;
+            }
+        }
+
+        for (int i = 0; i < n; i++) {
+            Uint8 cr, cg, cb;
+            particle_rgb(i, max_val, &cr, &cg, &cb);
+            draw_particle(rend, p[i].x, p[i].y, p[i].radius, cr, cg, cb);
+        }
         draw_vessel(rend);
         double ke, pe;
         double te = compute_energy(n, &ke, &pe);
