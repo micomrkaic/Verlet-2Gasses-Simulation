@@ -54,12 +54,12 @@ DEFS = -DDATADIR='"$(DATADIR)"' -DBALLSIM_VERSION='"$(VERSION)"'
 all: ballsim ballsim_v2
 
 # ── v1: event-driven, exact CCD, up to 500 particles ─────────────────────────
-ballsim: verlet_collisions_two_gasses_video.c
+ballsim: verlet_collisions_two_gasses_video.c Makefile
 	$(CC) $(CFLAGS) $(SDL_CF) -o $@ $< $(LIBS)
 	@echo "Built v1: ./ballsim"
 
 # ── v2: cell-list Verlet MD, up to 5000 particles, OpenMP ───────────────────
-ballsim_v2: ballsim_v2.c
+ballsim_v2: ballsim_v2.c Makefile
 	$(CC_V2) $(CFLAGS) $(SDL_CF) $(OMP_CF) $(DEFS) -o $@ $< $(OMP_LF) $(LIBS)
 	@echo "Built v2: ./ballsim_v2"
 
