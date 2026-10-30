@@ -22,7 +22,14 @@
        sideways; browser zoom (Ctrl +/-) scales it crisply if wanted. */
     #wrap { position: relative; border: 1px solid #1e2a40; box-shadow: 0 0 40px #0a1020;
             line-height: 0; max-width: 100%; overflow: auto; }
-    canvas { display: block; image-rendering: pixelated; }
+    /* --cw/--ch are set by the view buttons below; !important overrides the
+       inline size Emscripten's SDL writes on the element. */
+    canvas { display: block; image-rendering: pixelated;
+             width: var(--cw) !important; height: var(--ch) !important; }
+    #view { display: flex; gap: 8px; align-items: center; font-size: 11px; color: #556677; letter-spacing: .06em; }
+    #view button { background: #141a28; border: 1px solid #2a3a50; color: #8899aa; font: inherit;
+                   padding: 2px 9px; cursor: pointer; border-radius: 3px; }
+    #view button.on { color: #cfe3ff; border-color: #4488cc; background: #1a2a44; }
     #overlay {
       position: absolute; inset: 0; background: #0d0f1a; display: flex; flex-direction: column;
       align-items: center; justify-content: center; gap: 18px; transition: opacity .4s; line-height: 1.4;
@@ -56,12 +63,19 @@
     </div>
   </div>
 
+  <div id="view">
+    VIEW
+    <button data-mode="pixel">1:1 pixels</button>
+    <button data-mode="fit">fit width</button>
+    <button data-mode="x2">2&times;</button>
+    <span id="viewinfo"></span>
+  </div>
+
   <div class="hints">
     <kbd>M</kbd> monoenergetic reset &nbsp; <kbd>R</kbd> random reset &nbsp;
     <kbd>C</kbd> colour mode &nbsp; <kbd>T</kbd> reset tracer/MSD &nbsp;
     <kbd>+</kbd>/<kbd>&minus;</kbd> add/remove particle<br>
-    click the canvas first so it receives keys &middot; drag the sliders in the panel &middot;
-    window narrower than 1280 px? scroll sideways or zoom out
+    click the canvas first so it receives keys &middot; drag the sliders in the panel
   </div>
 
   <footer>Mico Mrkaic &middot; C / SDL2 / WebAssembly &middot; runs entirely in your browser</footer>
@@ -90,6 +104,37 @@
     // Keys go to the canvas, not the page, so Space/arrows don't scroll.
     document.getElementById('wrap').addEventListener('click', function () {
       document.getElementById('canvas').focus();
+    });
+
+    // ── View scaling ──────────────────────────────────────────────────────
+    // The simulation renders into a fixed 1280x960 backing store.  How many
+    // physical pixels that occupies depends on devicePixelRatio (OS display
+    // scaling x browser zoom).  "1:1 pixels" shows exactly one device pixel
+    // per sim pixel -- but never fewer than that: at ratios < 1 the CSS size
+    // is enlarged so the pixel font is not minified.
+    var SIM_W = 1280, SIM_H = 960, viewMode = 'pixel';
+    function applyView() {
+      var dpr = window.devicePixelRatio || 1, k;
+      if (viewMode === 'fit')      k = Math.max(0.5, (document.documentElement.clientWidth - 24) / SIM_W);
+      else if (viewMode === 'x2')  k = 2 / Math.min(dpr, 1);
+      else                         k = 1 / Math.min(dpr, 1);          // 1:1 device pixels, floor 1
+      var r = document.documentElement.style;
+      r.setProperty('--cw', (SIM_W * k) + 'px');
+      r.setProperty('--ch', (SIM_H * k) + 'px');
+      document.querySelectorAll('#view button').forEach(function (b) {
+        b.classList.toggle('on', b.dataset.mode === viewMode);
+      });
+      document.getElementById('viewinfo').textContent =
+        Math.round(SIM_W * k * dpr) + ' px wide on screen \u00b7 device pixel ratio ' + dpr.toFixed(2);
+    }
+    document.querySelectorAll('#view button').forEach(function (b) {
+      b.addEventListener('click', function () { viewMode = b.dataset.mode; applyView(); });
+    });
+    try { viewMode = localStorage.getItem('ballsim.view') || 'pixel'; } catch (e) {}
+    window.addEventListener('resize', applyView);
+    applyView();
+    document.querySelectorAll('#view button').forEach(function (b) {
+      b.addEventListener('click', function () { try { localStorage.setItem('ballsim.view', viewMode); } catch (e) {} });
     });
   </script>
 
