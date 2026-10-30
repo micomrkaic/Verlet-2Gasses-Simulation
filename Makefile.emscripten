@@ -1,72 +1,46 @@
 CC      = emcc
-SRC_V1  = ballsim_wasm.c      # v1 physics, event-driven, 500 particles
-SRC_V2  = ballsim_v2.c        # v2 physics, cell list, 5000 particles (single-threaded in WASM)
-TARGET  = ballsim.html        # local dev build of v2: also emits ballsim.js + ballsim.wasm
+SRC     = ballsim_wasm.c
+TARGET  = ballsim.html   # local dev: also emits ballsim.js + ballsim.wasm
 
 # ── Emscripten flags ──────────────────────────────────────────────────────────
 #   No ALLOW_MEMORY_GROWTH: a growable WebAssembly.Memory is exposed as a
 #   resizable ArrayBuffer in Chrome >= 111, and older Emscripten runtimes'
 #   TextDecoder.decode() throws on it ("must not be resizable").  The sim's
 #   memory use is static (<= 500 particles), so a fixed 64 MB heap is plenty.
-#   FORCE_FILESYSTEM + exported FS/UTF8ToString: the S/L keys write the state
-#   file to the in-memory FS and mirror it to localStorage from EM_ASM.
+#   TEXTDECODER=0 avoids the same trap on any other path.
 EMFLAGS = \
 	-s USE_SDL=2 \
 	-s INITIAL_MEMORY=67108864 \
-	-s EXIT_RUNTIME=0 \
-	-s FORCE_FILESYSTEM=1 \
-	-s EXPORTED_RUNTIME_METHODS=FS,UTF8ToString
+	-s TEXTDECODER=0 \
+	-s EXIT_RUNTIME=0
 
-# Landing page.  shell.html wraps the canvas with a header, nav (v1 <-> v2,
-# source) and key hints.  Fall back to Emscripten's default page with:
-#     make -f Makefile.emscripten pages PLAIN=1
-ifeq ($(PLAIN),)
-SHELL_HTML = --shell-file shell.html
-SHELL_DEP  = shell.html
-endif
+CFLAGS  = -O2 -std=c11 -Wall -Wextra -Wno-unused-parameter $(EMFLAGS)
 
-CFLAGS  = -O2 -std=c11 -Wall -Wextra -Wno-unused-parameter $(EMFLAGS) $(SHELL_HTML)
-
-# Where `make publish` puts the site: the folder GitHub Pages serves
-# (Settings -> Pages -> Source: branch main, folder /docs).
-DOCS ?= docs
-
-.PHONY: all clean serve pages publish native
+.PHONY: all clean serve pages native
 
 # ── Local dev build ───────────────────────────────────────────────────────────
 all: $(TARGET)
 
-$(TARGET): $(SRC_V2) $(SHELL_DEP)
-	$(CC) $(CFLAGS) -o $@ $(SRC_V2) -lm
+$(TARGET): $(SRC) shell.html
+	$(CC) $(CFLAGS) -o $@ $(SRC) -lm
 	@echo "Built. Run:  python3 -m http.server 8080"
 
 serve: all
 	python3 -m http.server 8080
 
-# ── GitHub Pages / itch.io build ──────────────────────────────────────────────
-# dist/index.html (+ .js/.wasm)  = v2   ← served at the site root
-# dist/v1.html    (+ .js/.wasm)  = v1   ← reachable at /v1.html
-# Emscripten hard-codes the .js name into the .html: never rename these.
-pages: $(SRC_V1) $(SRC_V2) $(SHELL_DEP)
+# ── GitHub Pages build ────────────────────────────────────────────────────────
+# Outputs to dist/ as index.html + index.js + index.wasm so Pages serves
+# the simulation at the repo's root URL with no redirects needed.
+pages: $(SRC) shell.html
 	mkdir -p dist
-	$(CC) $(CFLAGS) -o dist/index.html $(SRC_V2) -lm
-	$(CC) $(CFLAGS) -o dist/v1.html    $(SRC_V1) -lm
-	@echo "Pages build ready in dist/: index.* (v2), v1.* (v1)"
-
-# Build and stage into $(DOCS)/ for GitHub Pages.  Then:
-#     git add docs && git commit -m "Pages: rebuild" && git push
-publish: pages
-	mkdir -p $(DOCS)
-	cp dist/index.html dist/index.js dist/index.wasm \
-	   dist/v1.html    dist/v1.js    dist/v1.wasm    $(DOCS)/
-	touch $(DOCS)/.nojekyll
-	@echo "Staged in $(DOCS)/ — commit and push to deploy."
+	$(CC) $(CFLAGS) -o dist/index.html $(SRC) -lm
+	@echo "Pages build ready in dist/"
 
 # ── Native build (unchanged workflow) ────────────────────────────────────────
-native: $(SRC_V1)
+native: $(SRC)
 	gcc -O2 -std=c11 -Wall -Wextra -Wno-unused-parameter \
 	    $$(pkg-config --cflags sdl2 2>/dev/null || echo -I/usr/include/SDL2) \
-	    -o ballsim $(SRC_V1) \
+	    -o ballsim $(SRC) \
 	    $$(pkg-config --libs sdl2 2>/dev/null || echo -lSDL2) -lm
 	@echo "Built native: ./ballsim"
 

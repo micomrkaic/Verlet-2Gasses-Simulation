@@ -1,104 +1,81 @@
-CC      = gcc
-CFLAGS  = -O3 -std=c11 -Wall -Wextra -Wno-unused-parameter
-UNAME  := $(shell uname -s)
-VERSION = 2.1
+# Makefile — spring_grid
+# Linux (sdl2-config / pkg-config) and macOS/Homebrew (Apple Silicon + Intel)
+#   make            optimised build        ->  ./spring_grid
+#   make debug      ASan + UBSan build      ->  ./spring_grid_debug
+#   make test       headless physics tests (no SDL needed)
+#   make install    binary -> ~/.local/bin, man page -> ~/.local/share/man/man1
+#   make uninstall  remove both
+#   make clean
+#
+# Install location: override PREFIX (e.g. make install PREFIX=/usr/local);
+# DESTDIR is honoured for staged installs.
 
-# ── Install locations (XDG user layout; override: make install PREFIX=/usr/local)
+CC     ?= cc
+TARGET  = spring_grid
+
+CORE    = src/params.c src/modes.c src/util.c src/sim.c src/spectrum.c
+GUI     = src/font.c src/render.c src/main.c
+HDRS    = $(wildcard src/*.h)
+
+# ── SDL2 ──────────────────────────────────────────────────────────────────────
+SDL2_CONFIG := $(shell command -v sdl2-config 2>/dev/null || \
+                 ls /opt/homebrew/bin/sdl2-config 2>/dev/null || \
+                 ls /usr/local/bin/sdl2-config 2>/dev/null)
+SDL2_CFLAGS  = $(shell $(SDL2_CONFIG) --cflags)
+SDL2_LIBS    = $(shell $(SDL2_CONFIG) --libs)
+
+# ── FFTW3 ─────────────────────────────────────────────────────────────────────
+FFTW_CFLAGS := $(shell pkg-config --cflags fftw3 2>/dev/null || \
+    ([ -f /opt/homebrew/include/fftw3.h ] && echo -I/opt/homebrew/include) || \
+    ([ -f /usr/local/include/fftw3.h    ] && echo -I/usr/local/include))
+FFTW_LIBS   := $(shell pkg-config --libs fftw3 2>/dev/null || \
+    ([ -f /opt/homebrew/include/fftw3.h ] && echo -L/opt/homebrew/lib -lfftw3) || \
+    ([ -f /usr/local/include/fftw3.h    ] && echo -L/usr/local/lib -lfftw3) || \
+    echo -lfftw3)
+
+WARN    = -std=c17 -Wall -Wextra -Wpedantic
+RFLAGS  = -O2
+DFLAGS  = -O0 -g3 -fsanitize=address,undefined
+
+# ── install locations ─────────────────────────────────────────────────────────
 PREFIX  ?= $(HOME)/.local
-BINDIR  ?= $(PREFIX)/bin
-DATADIR ?= $(PREFIX)/share/ballsim
-MANDIR  ?= $(PREFIX)/share/man/man1
-INSTALL ?= install
+BINDIR   = $(DESTDIR)$(PREFIX)/bin
+MANDIR   = $(DESTDIR)$(PREFIX)/share/man/man1
+MANPAGE  = man/spring_grid.1
 
-ifeq ($(UNAME), Darwin)
-    SDL_CF = -I/opt/homebrew/include -I/opt/homebrew/include/SDL2 \
-             -I/usr/local/include   -I/usr/local/include/SDL2
-    SDL_LF = -L/opt/homebrew/lib -L/usr/local/lib -lSDL2
+.PHONY: all debug test clean check-sdl install uninstall
 
-    # Match only gcc-NN (digits only after the dash) — avoids gcc-ranlib-NN etc.
-    GCC_BIN := $(shell find /opt/homebrew/bin /usr/local/bin -name 'gcc-[0-9]*' \
-                    -not -name 'gcc-*-*' 2>/dev/null | sort | tail -1)
+all: $(TARGET)
 
-    ifneq ($(GCC_BIN),)
-        CC_V2  = $(GCC_BIN)
-        OMP_CF = -fopenmp
-        OMP_LF = -fopenmp
-    else
-        CC_V2   = $(CC)
-        LIBOMP := $(shell brew --prefix libomp 2>/dev/null)
-        ifneq ($(LIBOMP),)
-            OMP_CF = -Xpreprocessor -fopenmp -I$(LIBOMP)/include
-            OMP_LF = -L$(LIBOMP)/lib -lomp
-        else
-            $(warning OpenMP not found — ballsim_v2 will be single-threaded.)
-            $(warning Fix: brew install gcc   OR   brew install libomp)
-            OMP_CF =
-            OMP_LF =
-        endif
-    endif
-else
-    SDL_CF = $(shell pkg-config --cflags sdl2 2>/dev/null || echo -I/usr/include/SDL2)
-    SDL_LF = $(shell pkg-config --libs   sdl2 2>/dev/null || echo -lSDL2)
-    CC_V2  = $(CC)
-    OMP_CF = -fopenmp
-    OMP_LF = -fopenmp
-endif
+check-sdl:
+	@[ -n "$(SDL2_CONFIG)" ] || { echo "sdl2-config not found. Install SDL2: brew install sdl2  OR  apt install libsdl2-dev"; exit 1; }
 
-LIBS = $(SDL_LF) -lm
-# Compile the install-time asset directory into v2 so an installed binary
-# finds its default config from any working directory.
-DEFS = -DDATADIR='"$(DATADIR)"' -DBALLSIM_VERSION='"$(VERSION)"'
+$(TARGET): $(CORE) $(GUI) $(HDRS) | check-sdl
+	$(CC) $(WARN) $(RFLAGS) $(SDL2_CFLAGS) $(FFTW_CFLAGS) $(CORE) $(GUI) -o $@ $(SDL2_LIBS) $(FFTW_LIBS) -lm
 
-.PHONY: all clean run run2 bench install uninstall
+$(TARGET)_debug: $(CORE) $(GUI) $(HDRS) | check-sdl
+	$(CC) $(WARN) $(DFLAGS) $(SDL2_CFLAGS) $(FFTW_CFLAGS) $(CORE) $(GUI) -o $@ $(SDL2_LIBS) $(FFTW_LIBS) -lm
 
-all: ballsim ballsim_v2
+debug: $(TARGET)_debug
 
-# ── v1: event-driven, exact CCD, up to 500 particles ─────────────────────────
-ballsim: verlet_collisions_two_gasses_video.c
-	$(CC) $(CFLAGS) $(SDL_CF) -o $@ $< $(LIBS)
-	@echo "Built v1: ./ballsim"
+tests/test_sim: tests/test_sim.c $(CORE) $(HDRS)
+	$(CC) $(WARN) $(RFLAGS) $(FFTW_CFLAGS) $(CORE) tests/test_sim.c -o $@ $(FFTW_LIBS) -lm
 
-# ── v2: cell-list Verlet MD, up to 5000 particles, OpenMP ───────────────────
-ballsim_v2: ballsim_v2.c
-	$(CC_V2) $(CFLAGS) $(SDL_CF) $(OMP_CF) $(DEFS) -o $@ $< $(OMP_LF) $(LIBS)
-	@echo "Built v2: ./ballsim_v2"
+test: tests/test_sim
+	./tests/test_sim
 
-run:  ballsim    ; ./ballsim
-run2: ballsim_v2 ; ./ballsim_v2
-
-# Headless benchmark sweep (no window). Override: make bench STEPS=2400
-STEPS ?= 1200
-bench: ballsim_v2
-	@for n in 300 1000 2000 5000; do ./ballsim_v2 --bench $$n $(STEPS) --seed 1; done
-
-# ── Install ──────────────────────────────────────────────────────────────────
-#   $(BINDIR)/ballsim, ballsim_v2          binaries
-#   $(DATADIR)/ballsim_v2.cfg              pristine default config (generated)
-#   $(MANDIR)/ballsim_v2.1, ballsim.1      man page (+ alias)
-# Personal edits belong in ~/.config/ballsim/ballsim_v2.cfg, which the binary
-# prefers over the share copy — see ballsim_v2(1), FILES.
-install: all
-	$(INSTALL) -d "$(BINDIR)" "$(DATADIR)" "$(MANDIR)"
-	$(INSTALL) -m 755 ballsim ballsim_v2 "$(BINDIR)/"
-	./ballsim_v2 --write-config "$(DATADIR)/ballsim_v2.cfg"
-	$(INSTALL) -m 644 ballsim_v2.1 "$(MANDIR)/ballsim_v2.1"
-	printf '.so man1/ballsim_v2.1\n' > "$(MANDIR)/ballsim.1"
-	@echo
-	@echo "Installed to $(PREFIX):"
-	@echo "  $(BINDIR)/ballsim_v2   $(BINDIR)/ballsim"
-	@echo "  $(DATADIR)/ballsim_v2.cfg"
-	@echo "  $(MANDIR)/ballsim_v2.1"
-	@case ":$$PATH:" in *":$(BINDIR):"*) ;; *) \
-	  echo; echo "NOTE: $(BINDIR) is not in PATH. Add to your shell rc:"; \
-	  echo "  export PATH=\"$(BINDIR):\$$PATH\"";; esac
-	@echo "If 'man ballsim_v2' is not found: export MANPATH=\"$(PREFIX)/share/man:\$$MANPATH\""
+install: $(TARGET) $(MANPAGE)
+	install -d $(BINDIR) $(MANDIR)
+	install -m 755 $(TARGET) $(BINDIR)/$(TARGET)
+	install -m 644 $(MANPAGE) $(MANDIR)/spring_grid.1
+	@echo "installed $(BINDIR)/$(TARGET)"
+	@echo "installed $(MANDIR)/spring_grid.1"
+	@case ":$$PATH:" in *":$(PREFIX)/bin:"*) ;; \
+	  *) echo "note: $(PREFIX)/bin is not on your PATH; add  export PATH=\"$(PREFIX)/bin:\$$PATH\"  to your shell rc" ;; esac
 
 uninstall:
-	rm -f "$(BINDIR)/ballsim" "$(BINDIR)/ballsim_v2"
-	rm -f "$(DATADIR)/ballsim_v2.cfg"
-	rm -f "$(MANDIR)/ballsim_v2.1" "$(MANDIR)/ballsim.1"
-	-rmdir "$(DATADIR)" 2>/dev/null
-	@echo "Uninstalled from $(PREFIX). Your ~/.config/ballsim/ was left untouched."
+	rm -f $(BINDIR)/$(TARGET) $(MANDIR)/spring_grid.1
+	@echo "removed $(BINDIR)/$(TARGET) and $(MANDIR)/spring_grid.1"
 
 clean:
-	rm -f ballsim ballsim_v2
+	rm -f $(TARGET) $(TARGET)_debug tests/test_sim
