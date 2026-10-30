@@ -43,6 +43,9 @@
 #ifdef _OPENMP
 #  include <omp.h>
 #endif
+#ifdef __EMSCRIPTEN__
+#  include <emscripten.h>
+#endif
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
@@ -1014,10 +1017,16 @@ static int run_bench(int n, int steps) {
 // ── Video recording (ffmpeg pipe) ─────────────────────────────────────────────
 // ═══════════════════════════════════════════════════════════════════════════════
 #define REC_FPS 60
-static FILE  *rec_pipe    = NULL;
 static bool   rec_active  = false;
 static Uint32 rec_blink   = 0;
 static long   rec_frames  = 0;
+#ifdef __EMSCRIPTEN__
+// No subprocesses in the browser: recording is a no-op.
+static bool record_start(SDL_Renderer *rend) { (void)rend; return false; }
+static void record_stop(void) {}
+static void capture_frame(SDL_Renderer *rend) { (void)rend; }
+#else
+static FILE  *rec_pipe    = NULL;
 static Uint8 *rec_pixels  = NULL;
 static int    rec_w = 0, rec_h = 0;   // renderer output size (HiDPI-aware)
 static char   rec_filename[64];
@@ -1063,6 +1072,7 @@ static void capture_frame(SDL_Renderer *rend) {
     rec_wall_next += (Uint32)(1000 / REC_FPS);
     if (now > rec_wall_next + (Uint32)(1000 / REC_FPS)) rec_wall_next = now;
 }
+#endif /* __EMSCRIPTEN__ */
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // ── Drawing ───────────────────────────────────────────────────────────────────
@@ -1808,6 +1818,7 @@ static void trail_push(int n) {
 #endif
 #define CFG_NAME "ballsim_v2.cfg"
 
+#ifndef __EMSCRIPTEN__
 static bool file_readable(const char *path) {
     FILE *f = fopen(path, "r");
     if (!f) return false;
@@ -1832,6 +1843,90 @@ static const char *find_config(char *buf, size_t sz) {
         if (file_readable(buf)) return buf;
     }
     return CFG_NAME;   // nothing found; load_config will report and use defaults
+}
+#endif
+
+// ── Frame loop (one iteration; driven by main() natively, by the browser's
+//    requestAnimationFrame under Emscripten) ──────────────────────────────────
+static struct {
+    SDL_Renderer *rend;
+    int    n;
+    bool   running;
+    Uint32 t_prev, t_last_samp;
+    double accumulator, fixed_dt;
+    long   frames, max_frames;
+} L;
+
+static void main_loop_iter(void) {
+        SDL_Event ev;
+        while (SDL_PollEvent(&ev)) {
+            if (ev.type == SDL_QUIT) L.running = false;
+
+            if (ev.type == SDL_MOUSEBUTTONDOWN && ev.button.button == SDL_BUTTON_LEFT) {
+                int hit = slider_hit(ev.button.x, ev.button.y, g_slider_panel_top);
+                if (hit >= 0) {
+                    active_slider = hit;
+                    if (slider_set(hit, ev.button.x, g_slider_panel_top)) {
+                        L.n = cfg.n_particles; init_particles(L.n, true);
+                    }
+                }
+            }
+            if (ev.type == SDL_MOUSEBUTTONUP && ev.button.button == SDL_BUTTON_LEFT)
+                active_slider = -1;
+            if (ev.type == SDL_MOUSEMOTION && active_slider >= 0) {
+                if (slider_set(active_slider, ev.motion.x, g_slider_panel_top)) {
+                    L.n = cfg.n_particles; init_particles(L.n, true);
+                }
+            }
+
+            if (ev.type == SDL_KEYDOWN)
+                switch (ev.key.keysym.sym) {
+                case SDLK_ESCAPE: case SDLK_q: L.running = false; break;
+                case SDLK_r: init_particles(L.n, false); break;
+                case SDLK_m: init_particles(L.n, true);  break;
+                case SDLK_t: msd_reset(L.n); trail_head = trail_count = 0; break;
+                case SDLK_c: color_mode = (color_mode + 1) % N_COLOR_MODES; break;
+                case SDLK_EQUALS: case SDLK_PLUS:
+                    if (L.n < MAX_PARTICLES) { spawn_particle(L.n); L.n++; cfg.n_particles = L.n; }
+                    break;
+                case SDLK_MINUS:
+                    if (L.n > 2) { L.n--; cfg.n_particles = L.n; if (tracer_i >= L.n) tracer_i = 0; }
+                    break;
+                case SDLK_v:
+                    if (!rec_active) { record_start(L.rend); rec_blink = SDL_GetTicks(); }
+                    else record_stop();
+                    break;
+                }
+        }
+
+        Uint32 t_now = SDL_GetTicks();
+        double frame_time = (t_now - L.t_prev) / 1000.0;
+        if (frame_time > 0.05) frame_time = 0.05;
+        L.t_prev = t_now;
+        L.accumulator += frame_time;
+        if (frame_time > 0)
+            perf_fps = (perf_fps == 0) ? 1.0 / frame_time : 0.95 * perf_fps + 0.05 / frame_time;
+
+        Uint64 pc0 = SDL_GetPerformanceCounter();
+        while (L.accumulator >= L.fixed_dt) {
+            step_sim(L.n, L.fixed_dt);
+            L.accumulator -= L.fixed_dt;
+        }
+        double ms = 1000.0 * (double)(SDL_GetPerformanceCounter() - pc0) / SDL_GetPerformanceFrequency();
+        perf_step_ms = 0.9 * perf_step_ms + 0.1 * ms;
+        trail_push(L.n);
+
+        if (t_now - L.t_last_samp >= SAMPLE_MS) {
+            sample_diagnostics(L.n);
+            L.t_last_samp = t_now;
+        }
+
+        render_frame(L.rend, L.n);
+        SDL_RenderPresent(L.rend);
+        capture_frame(L.rend);
+#ifdef __EMSCRIPTEN__
+        if (!L.running) emscripten_cancel_main_loop();
+#endif
 }
 
 // ── Main ──────────────────────────────────────────────────────────────────────
@@ -1891,8 +1986,13 @@ int main(int argc, char **argv) {
     srand(seed);
 
     if (write_cfg) { config_derive(); write_default_config(write_path); return 0; }
+#ifdef __EMSCRIPTEN__
+    (void)cfg_buf;          // no filesystem in the browser: defaults + sliders
+    if (config_path) load_config(config_path);
+#else
     if (!config_path) config_path = find_config(cfg_buf, sizeof(cfg_buf));
     load_config(config_path);
+#endif
     config_derive();
 
     if (bench_n > 0 && bench_steps > 0) return run_bench(bench_n, bench_steps);
@@ -1913,6 +2013,11 @@ int main(int argc, char **argv) {
     SDL_Window *win = SDL_CreateWindow(
         "Parabolic Vessel \xe2\x80\x94 Hard Sphere Gas  [v2.1 cell-list MD]",
         SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, CFG_WIN_W, cfg.sim_h, wflags);
+#ifdef __EMSCRIPTEN__
+    // Software renderer draws through the 2D canvas: no WebGL context, which
+    // is what fails inside itch.io / Pages iframes.
+    headless = true;
+#endif
     SDL_Renderer *rend = SDL_CreateRenderer(win, -1,
         headless ? SDL_RENDERER_SOFTWARE
                  : (SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC));
@@ -1947,80 +2052,19 @@ int main(int argc, char **argv) {
         return 0;
     }
 
-    Uint32 t_prev = SDL_GetTicks(), t_last_samp = t_prev;
-    double accumulator = 0.0;
-    bool running = true;
-    long frames = 0;
+    L.rend = rend; L.n = n; L.fixed_dt = FIXED_DT;
+    L.t_prev = SDL_GetTicks(); L.t_last_samp = L.t_prev;
+    L.accumulator = 0.0; L.running = true; L.frames = 0; L.max_frames = max_frames;
 
-    while (running) {
-        if (max_frames > 0 && ++frames > max_frames) break;
-        SDL_Event ev;
-        while (SDL_PollEvent(&ev)) {
-            if (ev.type == SDL_QUIT) running = false;
-
-            if (ev.type == SDL_MOUSEBUTTONDOWN && ev.button.button == SDL_BUTTON_LEFT) {
-                int hit = slider_hit(ev.button.x, ev.button.y, g_slider_panel_top);
-                if (hit >= 0) {
-                    active_slider = hit;
-                    if (slider_set(hit, ev.button.x, g_slider_panel_top)) {
-                        n = cfg.n_particles; init_particles(n, true);
-                    }
-                }
-            }
-            if (ev.type == SDL_MOUSEBUTTONUP && ev.button.button == SDL_BUTTON_LEFT)
-                active_slider = -1;
-            if (ev.type == SDL_MOUSEMOTION && active_slider >= 0) {
-                if (slider_set(active_slider, ev.motion.x, g_slider_panel_top)) {
-                    n = cfg.n_particles; init_particles(n, true);
-                }
-            }
-
-            if (ev.type == SDL_KEYDOWN)
-                switch (ev.key.keysym.sym) {
-                case SDLK_ESCAPE: case SDLK_q: running = false; break;
-                case SDLK_r: init_particles(n, false); break;
-                case SDLK_m: init_particles(n, true);  break;
-                case SDLK_t: msd_reset(n); trail_head = trail_count = 0; break;
-                case SDLK_c: color_mode = (color_mode + 1) % N_COLOR_MODES; break;
-                case SDLK_EQUALS: case SDLK_PLUS:
-                    if (n < MAX_PARTICLES) { spawn_particle(n); n++; cfg.n_particles = n; }
-                    break;
-                case SDLK_MINUS:
-                    if (n > 2) { n--; cfg.n_particles = n; if (tracer_i >= n) tracer_i = 0; }
-                    break;
-                case SDLK_v:
-                    if (!rec_active) { record_start(rend); rec_blink = SDL_GetTicks(); }
-                    else record_stop();
-                    break;
-                }
-        }
-
-        Uint32 t_now = SDL_GetTicks();
-        double frame_time = (t_now - t_prev) / 1000.0;
-        if (frame_time > 0.05) frame_time = 0.05;
-        t_prev = t_now;
-        accumulator += frame_time;
-        if (frame_time > 0)
-            perf_fps = (perf_fps == 0) ? 1.0 / frame_time : 0.95 * perf_fps + 0.05 / frame_time;
-
-        Uint64 pc0 = SDL_GetPerformanceCounter();
-        while (accumulator >= FIXED_DT) {
-            step_sim(n, FIXED_DT);
-            accumulator -= FIXED_DT;
-        }
-        double ms = 1000.0 * (double)(SDL_GetPerformanceCounter() - pc0) / SDL_GetPerformanceFrequency();
-        perf_step_ms = 0.9 * perf_step_ms + 0.1 * ms;
-        trail_push(n);
-
-        if (t_now - t_last_samp >= SAMPLE_MS) {
-            sample_diagnostics(n);
-            t_last_samp = t_now;
-        }
-
-        render_frame(rend, n);
-        SDL_RenderPresent(rend);
-        capture_frame(rend);
+#ifdef __EMSCRIPTEN__
+    // Browser: the runtime owns the loop; 0 = requestAnimationFrame cadence.
+    emscripten_set_main_loop(main_loop_iter, 0, 1);
+#else
+    while (L.running) {
+        if (L.max_frames > 0 && ++L.frames > L.max_frames) break;
+        main_loop_iter();
     }
+#endif
 
     record_stop();
     SDL_DestroyTexture(g_sprite);

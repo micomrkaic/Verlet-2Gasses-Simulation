@@ -1,6 +1,7 @@
 CC      = emcc
-SRC     = ballsim_wasm.c
-TARGET  = ballsim.html   # local dev: also emits ballsim.js + ballsim.wasm
+SRC_V1  = ballsim_wasm.c      # v1 physics, event-driven, 500 particles
+SRC_V2  = ballsim_v2.c        # v2 physics, cell list, 5000 particles (single-threaded in WASM)
+TARGET  = ballsim.html        # local dev build of v2: also emits ballsim.js + ballsim.wasm
 
 # ── Emscripten flags ──────────────────────────────────────────────────────────
 #   No ALLOW_MEMORY_GROWTH: a growable WebAssembly.Memory is exposed as a
@@ -19,26 +20,28 @@ CFLAGS  = -O2 -std=c11 -Wall -Wextra -Wno-unused-parameter $(EMFLAGS)
 # ── Local dev build ───────────────────────────────────────────────────────────
 all: $(TARGET)
 
-$(TARGET): $(SRC) shell.html
-	$(CC) $(CFLAGS) -o $@ $(SRC) -lm
+$(TARGET): $(SRC_V2)
+	$(CC) $(CFLAGS) -o $@ $(SRC_V2) -lm
 	@echo "Built. Run:  python3 -m http.server 8080"
 
 serve: all
 	python3 -m http.server 8080
 
-# ── GitHub Pages build ────────────────────────────────────────────────────────
-# Outputs to dist/ as index.html + index.js + index.wasm so Pages serves
-# the simulation at the repo's root URL with no redirects needed.
-pages: $(SRC) shell.html
+# ── GitHub Pages / itch.io build ──────────────────────────────────────────────
+# dist/index.html (+ .js/.wasm)  = v2   ← served at the site root
+# dist/v1.html    (+ .js/.wasm)  = v1   ← reachable at /v1.html
+# Emscripten hard-codes the .js name into the .html: never rename these.
+pages: $(SRC_V1) $(SRC_V2)
 	mkdir -p dist
-	$(CC) $(CFLAGS) -o dist/index.html $(SRC) -lm
-	@echo "Pages build ready in dist/"
+	$(CC) $(CFLAGS) -o dist/index.html $(SRC_V2) -lm
+	$(CC) $(CFLAGS) -o dist/v1.html    $(SRC_V1) -lm
+	@echo "Pages build ready in dist/: index.* (v2), v1.* (v1)"
 
 # ── Native build (unchanged workflow) ────────────────────────────────────────
-native: $(SRC)
+native: $(SRC_V1)
 	gcc -O2 -std=c11 -Wall -Wextra -Wno-unused-parameter \
 	    $$(pkg-config --cflags sdl2 2>/dev/null || echo -I/usr/include/SDL2) \
-	    -o ballsim $(SRC) \
+	    -o ballsim $(SRC_V1) \
 	    $$(pkg-config --libs sdl2 2>/dev/null || echo -lSDL2) -lm
 	@echo "Built native: ./ballsim"
 
