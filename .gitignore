@@ -55,3 +55,16 @@ dkms.conf
 *.dwo
 ballsim
 ballsim_v2
+ballsim
+ballsim_v2
+*.o
+*.mp4
+*.bmp
+ballsim.html
+ballsim.js
+ballsim.wasm
+index.html
+index.js
+index.wasm
+dist/
+*.zip

@@ -38,20 +38,27 @@ endif
 
 LIBS = $(SDL_LF) -lm
 
-.PHONY: all clean run run2
+.PHONY: all clean run run2 bench
 
 all: ballsim ballsim_v2
 
+# ── v1: event-driven, exact CCD, up to 500 particles ─────────────────────────
 ballsim: verlet_collisions_two_gasses_video.c
 	$(CC) $(CFLAGS) $(SDL_CF) -o $@ $< $(LIBS)
 	@echo "Built v1: ./ballsim"
 
+# ── v2: cell-list Verlet MD, up to 5000 particles, OpenMP ───────────────────
 ballsim_v2: ballsim_v2.c
 	$(CC_V2) $(CFLAGS) $(SDL_CF) $(OMP_CF) -o $@ $< $(OMP_LF) $(LIBS)
 	@echo "Built v2: ./ballsim_v2"
 
-run:  ballsim   ; ./ballsim
-run2: ballsim_v2; ./ballsim_v2
+run:  ballsim    ; ./ballsim
+run2: ballsim_v2 ; ./ballsim_v2
+
+# Headless benchmark sweep (no window). Override: make bench STEPS=2400
+STEPS ?= 1200
+bench: ballsim_v2
+	@for n in 300 1000 2000 5000; do ./ballsim_v2 --bench $$n $(STEPS) --seed 1; done
 
 clean:
 	rm -f ballsim ballsim_v2
