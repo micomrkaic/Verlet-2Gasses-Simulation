@@ -1792,22 +1792,68 @@ static void trail_push(int n) {
     if (trail_count < TRAIL_LEN) trail_count++;
 }
 
+// ── Config file search ────────────────────────────────────────────────────────
+// Without --config, the first readable file in this order is used:
+//   1. ./ballsim_v2.cfg                              (project-local override)
+//   2. $XDG_CONFIG_HOME/ballsim/ballsim_v2.cfg       (~/.config — user edits)
+//   3. $XDG_DATA_HOME/ballsim/ballsim_v2.cfg         (~/.local/share — installed default)
+//   4. DATADIR/ballsim_v2.cfg                        (compile-time, from `make install`)
+// Matching the XDG convention: `make install` puts the pristine default in
+// share/, and the user copies it to ~/.config/ballsim/ to customise.
+#ifndef BALLSIM_VERSION
+#define BALLSIM_VERSION "2.1"
+#endif
+#ifndef DATADIR
+#define DATADIR ""
+#endif
+#define CFG_NAME "ballsim_v2.cfg"
+
+static bool file_readable(const char *path) {
+    FILE *f = fopen(path, "r");
+    if (!f) return false;
+    fclose(f);
+    return true;
+}
+
+static const char *find_config(char *buf, size_t sz) {
+    if (file_readable(CFG_NAME)) return CFG_NAME;
+    const char *home = getenv("HOME");
+    const char *xc = getenv("XDG_CONFIG_HOME"), *xd = getenv("XDG_DATA_HOME");
+    if (xc && *xc) snprintf(buf, sz, "%s/ballsim/" CFG_NAME, xc);
+    else if (home) snprintf(buf, sz, "%s/.config/ballsim/" CFG_NAME, home);
+    else buf[0] = 0;
+    if (buf[0] && file_readable(buf)) return buf;
+    if (xd && *xd) snprintf(buf, sz, "%s/ballsim/" CFG_NAME, xd);
+    else if (home) snprintf(buf, sz, "%s/.local/share/ballsim/" CFG_NAME, home);
+    else buf[0] = 0;
+    if (buf[0] && file_readable(buf)) return buf;
+    if (DATADIR[0]) {
+        snprintf(buf, sz, "%s/" CFG_NAME, DATADIR);
+        if (file_readable(buf)) return buf;
+    }
+    return CFG_NAME;   // nothing found; load_config will report and use defaults
+}
+
 // ── Main ──────────────────────────────────────────────────────────────────────
 static void usage(void) {
     printf("Usage: ballsim_v2 [options]\n"
-           "  --config FILE          load config (default: ballsim_v2.cfg)\n"
-           "  --write-config [FILE]  write default config and exit\n"
+           "  --config FILE          load config from FILE\n"
+           "  --write-config [FILE]  write default config and exit (default: " CFG_NAME ")\n"
            "  --bench N STEPS        headless benchmark, no window\n"
            "  --screenshot FILE K    run K steps offscreen, save BMP, exit\n"
            "  --substeps K           Verlet sub-steps per 1/120 s (default %d)\n"
            "  --passes P             resolution passes per sub-step (default %d)\n"
            "  --threads T            OpenMP thread count\n"
-           "  --seed S               RNG seed (default: time)\n",
-           g_substeps, g_passes);
+           "  --seed S               RNG seed (default: time)\n"
+           "  --version              print version and exit\n"
+           "Config search order without --config: ./" CFG_NAME ", "
+           "$XDG_CONFIG_HOME/ballsim/, $XDG_DATA_HOME/ballsim/%s%s\n",
+           g_substeps, g_passes, DATADIR[0] ? ", " : "", DATADIR);
 }
 
 int main(int argc, char **argv) {
-    const char *config_path = "ballsim_v2.cfg";
+    const char *config_path = NULL;
+    char        cfg_buf[1024];
     const char *shot_path = NULL;
     int bench_n = 0, bench_steps = 0, shot_steps = 0, max_frames = 0;
     unsigned seed = (unsigned)time(NULL);
@@ -1836,7 +1882,8 @@ int main(int argc, char **argv) {
             ++i; fprintf(stderr, "Built without OpenMP; --threads ignored.\n");
 #endif
         }
-        else if (!strcmp(argv[i], "--help")) { usage(); return 0; }
+        else if (!strcmp(argv[i], "--help") || !strcmp(argv[i], "-h")) { usage(); return 0; }
+        else if (!strcmp(argv[i], "--version")) { printf("ballsim_v2 " BALLSIM_VERSION "\n"); return 0; }
         else { fprintf(stderr, "Unknown option: %s\n", argv[i]); usage(); return 1; }
     }
     if (g_substeps < 1) g_substeps = 1;
@@ -1844,6 +1891,7 @@ int main(int argc, char **argv) {
     srand(seed);
 
     if (write_cfg) { config_derive(); write_default_config(write_path); return 0; }
+    if (!config_path) config_path = find_config(cfg_buf, sizeof(cfg_buf));
     load_config(config_path);
     config_derive();
 

@@ -155,6 +155,38 @@ make clean
 The Makefile detects Homebrew `gcc-NN` on macOS and uses it for v2; it falls
 back to clang + libomp, then to no OpenMP with a warning.
 
+### Install
+
+```bash
+make install            # into ~/.local (no sudo)
+make uninstall
+make install PREFIX=/usr/local   # system-wide, with sudo
+```
+
+This puts:
+
+| Path | Contents |
+|---|---|
+| `~/.local/bin/ballsim_v2`, `ballsim` | binaries |
+| `~/.local/share/ballsim/ballsim_v2.cfg` | pristine default config (generated at install) |
+| `~/.local/share/man/man1/ballsim_v2.1` | man page (`ballsim.1` is an alias) |
+
+`ballsim_v2` is compiled with the share directory baked in, so it finds its
+default config from any working directory. To customise, copy the file to
+`~/.config/ballsim/ballsim_v2.cfg` and edit it there — that copy takes
+precedence and survives reinstalls. Full search order (first hit wins):
+
+```
+./ballsim_v2.cfg
+$XDG_CONFIG_HOME/ballsim/ballsim_v2.cfg     ~/.config/ballsim/
+$XDG_DATA_HOME/ballsim/ballsim_v2.cfg       ~/.local/share/ballsim/
+<DATADIR>/ballsim_v2.cfg                    set at build time
+```
+
+Make sure `~/.local/bin` is on your `PATH`; `man` normally derives its search
+path from `PATH`, so `man ballsim_v2` then works too (otherwise add
+`~/.local/share/man` to `MANPATH`). v1 (`ballsim`) only reads `./ballsim.cfg`.
+
 ### WebAssembly (itch.io / browser) — v1 physics
 
 ```bash
@@ -182,9 +214,11 @@ SharedArrayBuffer support.
   --passes P             overlap-resolution passes per sub-step (default 4)
   --threads T            OpenMP thread count
   --seed S               RNG seed
+  --version              print version and exit
 ```
 
-`substeps` and `passes` can also be set in the config file.
+`substeps` and `passes` can also be set in the config file. See
+`man ballsim_v2` for the full reference.
 
 ### Benchmark results
 
@@ -285,7 +319,8 @@ in the WASM build.
 ├── verlet_collisions_two_gasses_video.c   ← v1 source (event-driven, untouched)
 ├── ballsim_v2.c                           ← v2.1 source (cell-list MD + OpenMP + analysis)
 ├── ballsim_wasm.c                         ← WASM source (v1 physics, browser build)
-├── Makefile                               ← builds v1 + v2; `make bench`
+├── Makefile                               ← builds v1 + v2; `make bench`, `make install`
+├── ballsim_v2.1                           ← man page (troff)
 ├── Makefile.emscripten                    ← builds WASM with emcc
 ├── shell.html                             ← HTML wrapper for the WASM build
 └── README.md

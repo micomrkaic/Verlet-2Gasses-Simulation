@@ -1,0 +1,253 @@
+.TH BALLSIM_V2 1 2026-10-30 "ballsim 2.1" "User Commands"
+.SH NAME
+ballsim_v2, ballsim \- interactive 2D hard-sphere gas simulation in a
+parabolic vessel
+.SH SYNOPSIS
+.B ballsim_v2
+[\fB\-\-config\fR \fIFILE\fR]
+[\fB\-\-substeps\fR \fIK\fR]
+[\fB\-\-passes\fR \fIP\fR]
+[\fB\-\-threads\fR \fIT\fR]
+[\fB\-\-seed\fR \fIS\fR]
+.br
+.B ballsim_v2
+.B \-\-bench
+\fIN\fR \fISTEPS\fR
+.br
+.B ballsim_v2
+.B \-\-screenshot
+\fIFILE\fR \fIK\fR
+.br
+.B ballsim_v2
+.B \-\-write\-config
+[\fIFILE\fR]
+.br
+.B ballsim
+[\fB\-\-config\fR \fIFILE\fR] [\fB\-\-write\-config\fR [\fIFILE\fR]]
+.SH DESCRIPTION
+.B ballsim_v2
+is a real-time molecular dynamics simulation of a two-species hard-sphere gas
+under gravity, confined by a parabolic (or flat) floor, vertical walls and a
+ceiling that can oscillate as a piston.  It displays the particles, a stats
+panel with live sliders for every physical parameter, and an analysis panel
+showing equipartition between species, the Boltzmann H-function, the
+barometric density profile, wall pressure and the hard-disc equation of
+state, a P\-V loop for the piston, the mean-squared displacement of the heavy
+particles, and the mean free path compared with Enskog theory.
+.PP
+Two engines are provided.
+.B ballsim
+(v1) is event-driven: every collision time is solved analytically and the
+dynamics are exact, but detection is O(N\(S2) and the particle count is
+limited to 500.
+.B ballsim_v2
+integrates with a fixed timestep and a cell list, resolves overlaps with
+impulses, and runs the collision pass in parallel with OpenMP; it handles up
+to 5000 particles.  Position corrections are made energy-consistent, so the
+measured energy drift is about 0.002\ % over 40\ s at N\ =\ 1000.
+.SH OPTIONS
+.TP
+.BI \-\-config " FILE"
+Load parameters from
+.IR FILE .
+Without this option the file is searched for as described under
+.BR FILES .
+.TP
+.BR \-\-write\-config " [" \fIFILE\fR ]
+Write a config file containing the built-in defaults (default name
+.IR ballsim_v2.cfg )
+and exit.  Use this to obtain a template to edit.
+.TP
+.BI \-\-bench " N STEPS"
+Headless benchmark: run
+.I STEPS
+fixed timesteps of 1/120\ s with
+.I N
+particles, no window, and print throughput, energy drift, collision rate,
+compressibility, mean free path and residual overlap.
+.TP
+.BI \-\-screenshot " FILE K"
+Run
+.I K
+timesteps offscreen, render one frame to
+.I FILE
+(BMP) and exit.  Useful for documentation and for checking the layout on a
+headless machine.
+.TP
+.BI \-\-substeps " K"
+Verlet sub-steps per 1/120\ s outer step (default 8).  Lowering to 4 roughly
+doubles throughput at the cost of larger residual overlaps; energy drift is
+unaffected.
+.TP
+.BI \-\-passes " P"
+Overlap-resolution passes per sub-step (default 4).
+.TP
+.BI \-\-threads " T"
+Number of OpenMP threads (default: all cores).  Ignored in a build without
+OpenMP.
+.TP
+.BI \-\-seed " S"
+Seed for the random number generator (default: current time).  Benchmarks
+and screenshots are reproducible with a fixed seed.
+.TP
+.BR \-h ", " \-\-help
+Print usage and exit.
+.TP
+.B \-\-version
+Print the version and exit.
+.SH KEYS
+.TP
+.B M
+Reset, monoenergetic: every particle gets kinetic energy
+\(12\(mu\fImono_speed\fR\(S2 with a random direction.
+.TP
+.B R
+Reset with random speeds.
+.TP
+.B C
+Cycle the colour mode: SPECIES, SPEED, KE, HEIGHT, RAINBOW.
+.TP
+.B T
+Reset the mean-squared-displacement reference and the tracer trail.
+.TP
+.B V
+Start or stop MP4 recording (requires
+.BR ffmpeg (1)
+on the PATH).
+.TP
+.BR + ", " =
+Add one particle.
+.TP
+.B \-
+Remove one particle.
+.TP
+.BR Q ", " Esc
+Quit.
+.PP
+Sliders in the stats panel are set by clicking or dragging.  Changes that
+affect particle placement (count, radius, curvature, speed, species mix)
+reset the simulation.
+.SH CONFIGURATION
+The config file is plain text,
+.RI "one \fIkey\fR = \fIvalue\fR" " per line;"
+lines starting with
+.B #
+are comments.  Keys:
+.TP
+.BR sim_w ", " sim_h
+Simulation area in pixels (200\-2560 \(mu 200\-1440).  The window is 580\ px
+wider than
+.BR sim_w .
+These cannot be changed from the sliders.
+.TP
+.B n_particles
+Starting count (1\-5000; 1\-500 in
+.BR ballsim ).
+.TP
+.B gravity
+Downward acceleration in px/s\(S2.
+.TP
+.B radius
+Radius of a light particle in px.  Heavy particles have radius
+.IR radius " \(mu " mass_ratio "^(1/3)."
+.TP
+.B restitution
+Coefficient of restitution, 1.0 = elastic.
+.TP
+.B mono_speed
+Speed used by the
+.B M
+reset; this sets the temperature.
+.TP
+.B para_a
+Parabola curvature.  0 gives a flat rectangular box.
+.TP
+.BR ceil_amp ", " ceil_freq
+Piston amplitude in px (0 = fixed ceiling) and frequency in Hz.  The piston is
+quasi-static when
+.IR ceil_amp \(mu2\(*p\(mu ceil_freq
+is much smaller than
+.IR mono_speed ;
+faster than that it heats the gas (Fermi acceleration).
+.TP
+.BR heavy_frac ", " mass_ratio
+Fraction of heavy particles and their mass relative to light ones (1\-20).
+.TP
+.BR substeps ", " passes
+Solver settings, as the command-line options.
+.SH FILES
+Without
+.BR \-\-config ,
+.B ballsim_v2
+uses the first of these that exists:
+.PP
+.RS
+.nf
+\&./ballsim_v2.cfg
+$XDG_CONFIG_HOME/ballsim/ballsim_v2.cfg   (~/.config/ballsim/)
+$XDG_DATA_HOME/ballsim/ballsim_v2.cfg     (~/.local/share/ballsim/)
+\fIDATADIR\fR/ballsim_v2.cfg                    (set at build time)
+.fi
+.RE
+.PP
+.B make install
+places the pristine default in the share directory.  To customise, copy it to
+.I ~/.config/ballsim/
+and edit there; it then takes precedence and survives reinstalls.
+.B ballsim
+(v1) only reads
+.I ./ballsim.cfg
+or the file given with
+.BR \-\-config .
+.PP
+Recordings are written to the current directory as
+.IR ballsim_v2_YYYYMMDD_HHMMSS.mp4 .
+.SH ENVIRONMENT
+.TP
+.B OMP_NUM_THREADS
+Thread count, overridden by
+.BR \-\-threads .
+.TP
+.BR XDG_CONFIG_HOME ", " XDG_DATA_HOME
+Config search directories, see
+.BR FILES .
+.SH EXAMPLES
+Run with defaults:
+.PP
+.RS
+ballsim_v2
+.RE
+.PP
+Create and edit a personal config:
+.PP
+.RS
+.nf
+mkdir \-p ~/.config/ballsim
+ballsim_v2 \-\-write\-config ~/.config/ballsim/ballsim_v2.cfg
+$EDITOR ~/.config/ballsim/ballsim_v2.cfg
+.fi
+.RE
+.PP
+Benchmark 2000 particles for 20 simulated seconds with 4 threads:
+.PP
+.RS
+ballsim_v2 \-\-bench 2000 2400 \-\-threads 4 \-\-seed 1
+.RE
+.PP
+Render a frame after 10 s for a README:
+.PP
+.RS
+ballsim_v2 \-\-screenshot frame.bmp 1200 \-\-seed 3
+.RE
+.SH SEE ALSO
+.BR ffmpeg (1)
+.PP
+Project page and browser version:
+.UR https://micomrkaic.itch.io/two-d-gas-box-with-verlet
+itch.io
+.UE .
+.SH AUTHOR
+Mico Mrkaic
+.UR https://github.com/micomrkaic
+github.com/micomrkaic
+.UE .

@@ -1,6 +1,14 @@
 CC      = gcc
 CFLAGS  = -O3 -std=c11 -Wall -Wextra -Wno-unused-parameter
 UNAME  := $(shell uname -s)
+VERSION = 2.1
+
+# ── Install locations (XDG user layout; override: make install PREFIX=/usr/local)
+PREFIX  ?= $(HOME)/.local
+BINDIR  ?= $(PREFIX)/bin
+DATADIR ?= $(PREFIX)/share/ballsim
+MANDIR  ?= $(PREFIX)/share/man/man1
+INSTALL ?= install
 
 ifeq ($(UNAME), Darwin)
     SDL_CF = -I/opt/homebrew/include -I/opt/homebrew/include/SDL2 \
@@ -37,8 +45,11 @@ else
 endif
 
 LIBS = $(SDL_LF) -lm
+# Compile the install-time asset directory into v2 so an installed binary
+# finds its default config from any working directory.
+DEFS = -DDATADIR='"$(DATADIR)"' -DBALLSIM_VERSION='"$(VERSION)"'
 
-.PHONY: all clean run run2 bench
+.PHONY: all clean run run2 bench install uninstall
 
 all: ballsim ballsim_v2
 
@@ -49,7 +60,7 @@ ballsim: verlet_collisions_two_gasses_video.c
 
 # ── v2: cell-list Verlet MD, up to 5000 particles, OpenMP ───────────────────
 ballsim_v2: ballsim_v2.c
-	$(CC_V2) $(CFLAGS) $(SDL_CF) $(OMP_CF) -o $@ $< $(OMP_LF) $(LIBS)
+	$(CC_V2) $(CFLAGS) $(SDL_CF) $(OMP_CF) $(DEFS) -o $@ $< $(OMP_LF) $(LIBS)
 	@echo "Built v2: ./ballsim_v2"
 
 run:  ballsim    ; ./ballsim
@@ -59,6 +70,35 @@ run2: ballsim_v2 ; ./ballsim_v2
 STEPS ?= 1200
 bench: ballsim_v2
 	@for n in 300 1000 2000 5000; do ./ballsim_v2 --bench $$n $(STEPS) --seed 1; done
+
+# ── Install ──────────────────────────────────────────────────────────────────
+#   $(BINDIR)/ballsim, ballsim_v2          binaries
+#   $(DATADIR)/ballsim_v2.cfg              pristine default config (generated)
+#   $(MANDIR)/ballsim_v2.1, ballsim.1      man page (+ alias)
+# Personal edits belong in ~/.config/ballsim/ballsim_v2.cfg, which the binary
+# prefers over the share copy — see ballsim_v2(1), FILES.
+install: all
+	$(INSTALL) -d "$(BINDIR)" "$(DATADIR)" "$(MANDIR)"
+	$(INSTALL) -m 755 ballsim ballsim_v2 "$(BINDIR)/"
+	./ballsim_v2 --write-config "$(DATADIR)/ballsim_v2.cfg"
+	$(INSTALL) -m 644 ballsim_v2.1 "$(MANDIR)/ballsim_v2.1"
+	printf '.so man1/ballsim_v2.1\n' > "$(MANDIR)/ballsim.1"
+	@echo
+	@echo "Installed to $(PREFIX):"
+	@echo "  $(BINDIR)/ballsim_v2   $(BINDIR)/ballsim"
+	@echo "  $(DATADIR)/ballsim_v2.cfg"
+	@echo "  $(MANDIR)/ballsim_v2.1"
+	@case ":$$PATH:" in *":$(BINDIR):"*) ;; *) \
+	  echo; echo "NOTE: $(BINDIR) is not in PATH. Add to your shell rc:"; \
+	  echo "  export PATH=\"$(BINDIR):\$$PATH\"";; esac
+	@echo "If 'man ballsim_v2' is not found: export MANPATH=\"$(PREFIX)/share/man:\$$MANPATH\""
+
+uninstall:
+	rm -f "$(BINDIR)/ballsim" "$(BINDIR)/ballsim_v2"
+	rm -f "$(DATADIR)/ballsim_v2.cfg"
+	rm -f "$(MANDIR)/ballsim_v2.1" "$(MANDIR)/ballsim.1"
+	-rmdir "$(DATADIR)" 2>/dev/null
+	@echo "Uninstalled from $(PREFIX). Your ~/.config/ballsim/ was left untouched."
 
 clean:
 	rm -f ballsim ballsim_v2

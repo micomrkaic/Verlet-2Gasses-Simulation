@@ -68,3 +68,14 @@ index.js
 index.wasm
 dist/
 *.zip
+ballsim
+ballsim_v2
+*.o
+*.mp4
+*.bmp
+ballsim.html
+ballsim.js
+ballsim.wasm
+index.*
+dist/
+*.zip
