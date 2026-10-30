@@ -33,6 +33,11 @@
 // v1 (event-driven, exact CCD, 500 particles) is kept intact in
 //   verlet_collisions_two_gasses_video.c
 
+// POSIX for clock_gettime / localtime / popen under -std=c11 (musl/Emscripten
+// hides them without this; glibc happens not to).  Must precede all includes.
+#define _POSIX_C_SOURCE 200809L
+#define _DEFAULT_SOURCE
+
 #include <SDL2/SDL.h>
 #include <math.h>
 #include <stdbool.h>
