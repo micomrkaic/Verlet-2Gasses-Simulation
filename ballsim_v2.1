@@ -1,4 +1,4 @@
-.TH BALLSIM_V2 1 2026-10-30 "ballsim 2.1" "User Commands"
+.TH BALLSIM_V2 1 2026-10-30 "ballsim 2.2" "User Commands"
 .SH NAME
 ballsim_v2, ballsim \- interactive 2D hard-sphere gas simulation in a
 parabolic vessel
@@ -21,6 +21,9 @@ parabolic vessel
 .B ballsim_v2
 .B \-\-write\-config
 [\fIFILE\fR]
+.br
+.B ballsim_v2
+[\fB\-\-load\fR \fIFILE\fR] [\fB\-\-save\fR \fIFILE\fR]
 .br
 .B ballsim
 [\fB\-\-config\fR \fIFILE\fR] [\fB\-\-write\-config\fR [\fIFILE\fR]]
@@ -90,6 +93,21 @@ OpenMP.
 Seed for the random number generator (default: current time).  Benchmarks
 and screenshots are reproducible with a fixed seed.
 .TP
+.BI \-\-load " FILE"
+Start from a state file written by
+.B \-\-save
+or the
+.B S
+key.  Particle count, physics parameters and simulation time are restored;
+window size is kept.
+.TP
+.BI \-\-save " FILE"
+Write the state when the program exits (also after a
+.B \-\-bench
+run, where it gives a reproducible checkpoint: with
+.B \-\-seed
+the result is bit-identical across runs and thread counts).
+.TP
 .BR \-h ", " \-\-help
 Print usage and exit.
 .TP
@@ -110,6 +128,23 @@ Cycle the colour mode: SPECIES, SPEED, KE, HEIGHT, RAINBOW.
 .B T
 Reset the mean-squared-displacement reference and the tracer trail.
 .TP
+.B Space
+Pause / resume.
+.TP
+.B .
+Advance one fixed step of 1/120\ s (pauses first if running).
+.TP
+.BR [ ", " ]
+Halve / double the simulation speed, between 1/32 and 4 times real time.
+.TP
+.B S
+Save the state to
+.I ballsim_v2.state
+in the current directory (browser build: to the page's local storage).
+.TP
+.B L
+Load that state.
+.TP
 .B V
 Start or stop MP4 recording (requires
 .BR ffmpeg (1)
@@ -123,6 +158,18 @@ Remove one particle.
 .TP
 .BR Q ", " Esc
 Quit.
+.SH MOUSE
+In the simulation area:
+.TP
+left drag
+Launch a new particle from the press point with velocity 4\ px/s per pixel
+of drag, in the drag direction.  A click without drag drops one at rest.
+.TP
+right drag
+Push particles within 70\ px away from the cursor.
+.TP
+Ctrl + left click
+Make the nearest particle the tracer (ringed, with trail and MSD).
 .PP
 Sliders in the stats panel are set by clicking or dragging.  Changes that
 affect particle placement (count, radius, curvature, speed, species mix)
@@ -201,7 +248,12 @@ or the file given with
 .BR \-\-config .
 .PP
 Recordings are written to the current directory as
-.IR ballsim_v2_YYYYMMDD_HHMMSS.mp4 .
+.IR ballsim_v2_YYYYMMDD_HHMMSS.mp4 ;
+the
+.B S
+key writes
+.I ballsim_v2.state
+there as well.
 .SH ENVIRONMENT
 .TP
 .B OMP_NUM_THREADS

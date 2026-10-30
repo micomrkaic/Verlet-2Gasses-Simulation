@@ -15,7 +15,7 @@ alongside. WebAssembly, served from this repo's `docs/` via GitHub Pages.
 
 ## Two builds
 
-| | v1 | v2.1 |
+| | v1 | v2.2 |
 |---|---|---|
 | Source | `verlet_collisions_two_gasses_video.c` | `ballsim_v2.c` |
 | Binary | `ballsim` | `ballsim_v2` |
@@ -238,6 +238,8 @@ Notes:
   --passes P             overlap-resolution passes per sub-step (default 4)
   --threads T            OpenMP thread count
   --seed S               RNG seed
+  --load FILE            start from a saved state
+  --save FILE            write the state on exit (also after --bench)
   --version              print version and exit
 ```
 
@@ -299,17 +301,43 @@ v2 window is `sim_w + 580` wide (two panels). Reduce `radius` as you raise
 
 | Key | Action |
 |-----|--------|
+| `Space` | Pause / resume (v2) |
+| `.` | Single step of 1/120 s; pauses first if running (v2) |
+| `[` / `]` | Halve / double simulation speed, 1/32× … 4× (v2) |
 | `M` | Reset — monoenergetic (equal KE per particle) |
 | `R` | Reset — random speeds |
 | `C` | Cycle colour mode: SPECIES → SPEED → KE → HEIGHT → RAINBOW (v2) |
 | `T` | Reset the MSD reference and tracer trail (v2) |
-| `V` | Toggle MP4 recording (Retina-aware in v2) |
+| `S` / `L` | Save / load `ballsim_v2.state` (browser: page local storage) (v2) |
+| `V` | Toggle MP4 recording (native only) |
 | `+` / `=` | Add a particle (v2: spawned under the ceiling) |
 | `-` | Remove a particle |
 | `Q` / `Esc` | Quit |
 
-Sliders: click a track to jump, drag to scrub. Changes affecting placement
-trigger a reset.
+Mouse, in the simulation area (v2): **left-drag** launches a particle from
+the press point (4 px/s per px of drag; a plain click drops one at rest),
+**right-drag** pushes particles within 70 px away from the cursor,
+**Ctrl-click** makes the nearest particle the tracer. Sliders in the panel:
+click a track to jump, drag to scrub; changes affecting placement trigger a
+reset.
+
+### State files and reproducibility
+
+`S` writes `ballsim_v2.state` (plain text: seed, config, time, one line per
+particle); `L` reads it back. On the command line, `--load FILE` starts from
+a state and `--save FILE` writes one at exit — including after `--bench`,
+which makes a reproducible checkpoint:
+
+```bash
+ballsim_v2 --bench 500 300 --seed 11 --save a.state
+ballsim_v2 --bench 500 300 --seed 11 --save b.state
+cmp a.state b.state        # identical
+```
+
+With a fixed `--seed` the run is bit-identical across runs **and across
+thread counts**: the 9-colour cell scheme gives every pair exactly one owner,
+so OpenMP scheduling cannot reorder the arithmetic. The seed is printed at
+start-up and stored in the state file.
 
 ---
 
@@ -341,7 +369,7 @@ in the WASM build.
 ```
 .
 ├── verlet_collisions_two_gasses_video.c   ← v1 source (event-driven, untouched)
-├── ballsim_v2.c                           ← v2.1 source (cell-list MD + OpenMP + analysis)
+├── ballsim_v2.c                           ← v2.2 source (cell-list MD + OpenMP + analysis)
 ├── ballsim_wasm.c                         ← v1 for the browser (v2 builds from ballsim_v2.c directly)
 ├── Makefile                               ← builds v1 + v2; `make bench`, `make install`
 ├── ballsim_v2.1                           ← man page (troff)

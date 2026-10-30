@@ -8,10 +8,14 @@ TARGET  = ballsim.html        # local dev build of v2: also emits ballsim.js + b
 #   resizable ArrayBuffer in Chrome >= 111, and older Emscripten runtimes'
 #   TextDecoder.decode() throws on it ("must not be resizable").  The sim's
 #   memory use is static (<= 500 particles), so a fixed 64 MB heap is plenty.
+#   FORCE_FILESYSTEM + exported FS/UTF8ToString: the S/L keys write the state
+#   file to the in-memory FS and mirror it to localStorage from EM_ASM.
 EMFLAGS = \
 	-s USE_SDL=2 \
 	-s INITIAL_MEMORY=67108864 \
-	-s EXIT_RUNTIME=0
+	-s EXIT_RUNTIME=0 \
+	-s FORCE_FILESYSTEM=1 \
+	-s EXPORTED_RUNTIME_METHODS=FS,UTF8ToString
 
 # Landing page.  shell.html wraps the canvas with a header, nav (v1 <-> v2,
 # source) and key hints.  Fall back to Emscripten's default page with:

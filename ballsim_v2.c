@@ -1,4 +1,4 @@
-// ballsim_v2.c — Parabolic Vessel · Hard Sphere Gas  (v2.1)
+// ballsim_v2.c — Parabolic Vessel · Hard Sphere Gas  (v2.2)
 //
 // Physics engine: fixed-dt Verlet integration + cell-list O(N) collision
 // detection.  Up to 5 000 particles.  OpenMP parallelism over a 9-colour
@@ -524,6 +524,154 @@ static void spawn_particle(int i) {
     ref_x[i] = p[i].x; ref_y[i] = p[i].y;
 }
 
+// Spawn at a point with a given velocity (mouse launch).  Clamped inside the
+// vessel; any overlap with neighbours is separated by the solver next step.
+static void spawn_at(int i, double x, double y, double vx, double vy) {
+    assign_species(i, true);
+    double ri = p[i].radius;
+    if (x < ri) x = ri;
+    if (x > cfg.sim_w - ri) x = cfg.sim_w - ri;
+    double top = ceil_y(sim_time) + ri, bot = para_y(x) - ri;
+    if (y < top) y = top;
+    if (y > bot) y = bot;
+    p[i].x = x; p[i].y = y; p[i].vx = vx; p[i].vy = vy;
+    ref_x[i] = x; ref_y[i] = y;
+}
+
+// ── Interaction state (pause / step / time scale / mouse tools) ───────────────
+static bool   g_paused      = false;
+static bool   g_step_once   = false;   // '.' pressed: advance one fixed step
+static double g_time_scale  = 1.0;     // 1/32 .. 4
+static int    g_mouse_x = -1, g_mouse_y = -1;   // logical coords, from motion events
+static bool   g_launch_drag = false;   // left button held in the sim area
+static int    g_launch_x0, g_launch_y0;
+static bool   g_push_drag   = false;   // right button held in the sim area
+#define LAUNCH_GAIN   4.0              // px/s of velocity per px of drag
+#define PUSH_RADIUS  70.0              // px
+#define PUSH_ACCEL 3000.0              // px/s^2 applied away from the cursor
+static unsigned g_seed = 0;
+static char   g_status[64] = "";       // transient message (save/load result)
+static Uint32 g_status_until = 0;
+
+static void set_status(const char *msg) {
+    snprintf(g_status, sizeof(g_status), "%s", msg);
+    g_status_until = SDL_GetTicks() + 2500;
+}
+
+// Right-drag: accelerate particles near the cursor away from it.
+static void apply_push(int n, double dt) {
+    if (!g_push_drag || g_mouse_x < 0 || g_mouse_x >= cfg.sim_w) return;
+    for (int i = 0; i < n; i++) {
+        double dx = p[i].x - g_mouse_x, dy = p[i].y - g_mouse_y;
+        double d2 = dx * dx + dy * dy;
+        if (d2 > PUSH_RADIUS * PUSH_RADIUS || d2 < 1e-9) continue;
+        double d = sqrt(d2), f = (1.0 - d / PUSH_RADIUS) * PUSH_ACCEL * dt;
+        p[i].vx += f * dx / d;
+        p[i].vy += f * dy / d;
+    }
+}
+
+static int nearest_particle(int n, double x, double y, double max_d) {
+    int best = -1; double bd = max_d * max_d;
+    for (int i = 0; i < n; i++) {
+        double dx = p[i].x - x, dy = p[i].y - y, d2 = dx * dx + dy * dy;
+        if (d2 < bd) { bd = d2; best = i; }
+    }
+    return best;
+}
+
+// ── State save / load ─────────────────────────────────────────────────────────
+// Plain text: header, seed, the 12 config fields, sim time, N, one particle per
+// line.  Loading replaces the particle set and config, keeps sim_time, and
+// resets the diagnostics (they describe the run, not the state).
+#define STATE_FILE "ballsim_v2.state"
+
+#ifdef __EMSCRIPTEN__
+// The browser build writes to Emscripten's in-memory FS; mirror that one file
+// to localStorage so S / L survive a page reload.
+static void browser_state_sync(const char *path, int to_storage) {
+    EM_ASM({
+        var path = UTF8ToString($0);
+        try {
+            if ($1) localStorage.setItem('ballsim.state', FS.readFile(path, {encoding: 'utf8'}));
+            else { var s = localStorage.getItem('ballsim.state'); if (s !== null) FS.writeFile(path, s); }
+        } catch (e) { console.warn('[ballsim] state sync:', e); }
+    }, path, to_storage);
+}
+#endif
+
+static bool save_state(const char *path, int n) {
+    FILE *f = fopen(path, "w");
+    if (!f) return false;
+    fprintf(f, "ballsim_v2 state 1\n");
+    fprintf(f, "seed %u\n", g_seed);
+    fprintf(f, "cfg %d %.17g %.17g %.17g %.17g %.17g %d %d %.17g %.17g %.17g %.17g\n",
+            cfg.n_particles, cfg.gravity, cfg.radius, cfg.restitution, cfg.mono_speed,
+            cfg.para_a, cfg.sim_w, cfg.sim_h, cfg.ceil_amp, cfg.ceil_freq,
+            cfg.heavy_frac, cfg.mass_ratio);
+    fprintf(f, "solver %d %d\n", g_substeps, g_passes);
+    fprintf(f, "time %.17g\n", sim_time);
+    fprintf(f, "n %d\n", n);
+    for (int i = 0; i < n; i++)
+        fprintf(f, "%d %.17g %.17g %.17g %.17g %.17g %.17g %.17g %d %d %d\n",
+                p[i].species, p[i].mass, p[i].radius, p[i].x, p[i].y, p[i].vx, p[i].vy,
+                p[i].hue, p[i].r, p[i].g, p[i].b);
+    bool ok = fclose(f) == 0;
+#ifdef __EMSCRIPTEN__
+    if (ok) browser_state_sync(path, 1);
+#endif
+    return ok;
+}
+
+// Returns the new particle count, or -1 on failure (state untouched).
+static int load_state(const char *path) {
+#ifdef __EMSCRIPTEN__
+    browser_state_sync(path, 0);
+#endif
+    FILE *f = fopen(path, "r");
+    if (!f) return -1;
+    static Particle tmp[MAX_PARTICLES];
+    Config c = cfg; int sub = g_substeps, pas = g_passes;
+    double t = 0; int n = -1; unsigned seed = g_seed;
+    char line[256]; int ok = 1;
+    if (!fgets(line, sizeof(line), f) || strncmp(line, "ballsim_v2 state 1", 18) != 0) ok = 0;
+    while (ok && fgets(line, sizeof(line), f)) {
+        if (sscanf(line, "seed %u", &seed) == 1) continue;
+        if (sscanf(line, "cfg %d %lf %lf %lf %lf %lf %d %d %lf %lf %lf %lf",
+                   &c.n_particles, &c.gravity, &c.radius, &c.restitution, &c.mono_speed,
+                   &c.para_a, &c.sim_w, &c.sim_h, &c.ceil_amp, &c.ceil_freq,
+                   &c.heavy_frac, &c.mass_ratio) == 12) continue;
+        if (sscanf(line, "solver %d %d", &sub, &pas) == 2) continue;
+        if (sscanf(line, "time %lf", &t) == 1) continue;
+        if (sscanf(line, "n %d", &n) == 1) {
+            if (n < 1 || n > MAX_PARTICLES) { ok = 0; break; }
+            for (int i = 0; i < n && ok; i++) {
+                int r, g, b;
+                if (!fgets(line, sizeof(line), f) ||
+                    sscanf(line, "%d %lf %lf %lf %lf %lf %lf %lf %d %d %d",
+                           &tmp[i].species, &tmp[i].mass, &tmp[i].radius, &tmp[i].x, &tmp[i].y,
+                           &tmp[i].vx, &tmp[i].vy, &tmp[i].hue, &r, &g, &b) != 11) { ok = 0; break; }
+                tmp[i].r = (Uint8)r; tmp[i].g = (Uint8)g; tmp[i].b = (Uint8)b;
+                if (tmp[i].species < 0 || tmp[i].species > 1) tmp[i].species = tmp[i].mass > 1.0;
+            }
+            break;
+        }
+    }
+    fclose(f);
+    if (!ok || n < 1) return -1;
+    // Geometry (sim_w/sim_h) is fixed at window creation: keep the current one.
+    c.sim_w = cfg.sim_w; c.sim_h = cfg.sim_h;
+    cfg = c; clamp_config(); config_derive();
+    g_substeps = sub > 0 ? sub : g_substeps;
+    g_passes   = pas > 0 ? pas : g_passes;
+    g_seed = seed;
+    cfg.n_particles = n;
+    memcpy(p, tmp, sizeof(Particle) * n);
+    reset_diagnostics(n);
+    sim_time = t;
+    return n;
+}
+
 // ── Energy ────────────────────────────────────────────────────────────────────
 static double compute_energy(int n, double *ke_out, double *pe_out) {
     double ke = 0, pe = 0;
@@ -984,6 +1132,8 @@ static double now_s(void) {
     return ts.tv_sec + ts.tv_nsec * 1e-9;
 }
 
+static const char *g_bench_save = NULL;   // --save with --bench: state after the last step
+
 static int run_bench(int n, int steps) {
     const double FIXED_DT = 1.0 / 120.0;
     cfg.n_particles = n;
@@ -1015,6 +1165,10 @@ static int run_bench(int n, int steps) {
            packing, Z_meas, Z_hend, mfp_meas, mfp_theory);
     printf("  max residual overlap %.2f %% of touch distance\n",
            100.0 * max_overlap_fraction(n));
+    if (g_bench_save) {
+        if (save_state(g_bench_save, n)) printf("  state saved to %s\n", g_bench_save);
+        else { fprintf(stderr, "Cannot save state to '%s'\n", g_bench_save); return 1; }
+    }
     return 0;
 }
 
@@ -1169,6 +1323,37 @@ static void draw_tracer(SDL_Renderer *rend, int n) {
         ring[k].y = (float)(p[tracer_i].y + R * sin(a));
     }
     SDL_RenderDrawLinesF(rend, ring, 25);
+    SDL_SetRenderDrawBlendMode(rend, SDL_BLENDMODE_NONE);
+}
+
+// Launch arrow (left-drag) and push ring (right-drag)
+static void draw_mouse_tools(SDL_Renderer *rend) {
+    SDL_SetRenderDrawBlendMode(rend, SDL_BLENDMODE_BLEND);
+    if (g_launch_drag && g_mouse_x >= 0) {
+        SDL_SetRenderDrawColor(rend, 0xFF, 0xFF, 0xFF, 200);
+        SDL_RenderDrawLine(rend, g_launch_x0, g_launch_y0, g_mouse_x, g_mouse_y);
+        SDL_Rect dot = {g_launch_x0 - 3, g_launch_y0 - 3, 7, 7};
+        SDL_RenderFillRect(rend, &dot);
+        // arrow head
+        double dx = g_mouse_x - g_launch_x0, dy = g_mouse_y - g_launch_y0, l = sqrt(dx * dx + dy * dy);
+        if (l > 8) {
+            double ux = dx / l, uy = dy / l;
+            SDL_RenderDrawLine(rend, g_mouse_x, g_mouse_y,
+                               (int)(g_mouse_x - 10 * ux + 5 * uy), (int)(g_mouse_y - 10 * uy - 5 * ux));
+            SDL_RenderDrawLine(rend, g_mouse_x, g_mouse_y,
+                               (int)(g_mouse_x - 10 * ux - 5 * uy), (int)(g_mouse_y - 10 * uy + 5 * ux));
+        }
+    }
+    if (g_push_drag && g_mouse_x >= 0 && g_mouse_x < cfg.sim_w) {
+        SDL_SetRenderDrawColor(rend, 0xFF, 0xAA, 0x44, 160);
+        SDL_FPoint ring[33];
+        for (int k = 0; k <= 32; k++) {
+            double a = 2.0 * M_PI * k / 32;
+            ring[k].x = (float)(g_mouse_x + PUSH_RADIUS * cos(a));
+            ring[k].y = (float)(g_mouse_y + PUSH_RADIUS * sin(a));
+        }
+        SDL_RenderDrawLinesF(rend, ring, 33);
+    }
     SDL_SetRenderDrawBlendMode(rend, SDL_BLENDMODE_NONE);
 }
 
@@ -1431,7 +1616,13 @@ static void draw_panel(SDL_Renderer *rend, int n, double total_e, double ke, dou
         }
     }
 
-    ds(rend, "V2.1", px, ty, 2, 0x33, 0x88, 0xFF);
+    ds(rend, "V2.2", px, ty, 2, 0x33, 0x88, 0xFF);
+    if (g_paused) ds(rend, "PAUSED - . STEPS", px + 44, ty, 2, 0xFF, 0xDD, 0x33);
+    else if (g_time_scale != 1.0) {
+        snprintf(buf, sizeof(buf), g_time_scale < 1 ? "SPEED 1/%.0f" : "SPEED %.0fX",
+                 g_time_scale < 1 ? 1.0 / g_time_scale : g_time_scale);
+        ds(rend, buf, px + 44, ty, 2, 0xFF, 0xDD, 0x33);
+    }
     ty += 18;
 
     snprintf(buf, sizeof(buf), "%dx%d", cfg.sim_w, cfg.sim_h);
@@ -1539,8 +1730,8 @@ static void draw_panel(SDL_Renderer *rend, int n, double total_e, double ke, dou
     g_slider_panel_top = ty;
     draw_sliders(rend, ty);
 
-    ds(rend, "R-RAND M-MONO C-COLOR T-TRACER V-REC Q-QUIT",
-       px, cfg.sim_h - 14, 1, 0x55, 0x66, 0x88);
+    if (g_status[0] && SDL_GetTicks() < g_status_until)
+        ds(rend, g_status, px, cfg.sim_h - 14, 2, 0xFF, 0xDD, 0x33);
 }
 
 // ── Analysis panel (right column) ─────────────────────────────────────────────
@@ -1771,6 +1962,22 @@ static void draw_analysis(SDL_Renderer *rend, int n, double ke) {
 #endif
     snprintf(buf, sizeof(buf), "%.0f FPS  %d THR  %dx%d", perf_fps, threads, g_substeps, g_passes);
     ty = row(rend, px, xr, ty, "FRAME", buf, 0x99, 0xAA, 0xBB);
+    ty += 6;
+
+    // ── Keys / mouse ────────────────────────────────────────────────────────
+    ds(rend, "KEYS", px, ty, 2, 0xAA, 0xBB, 0xCC); ty += 13;
+    static const char *keys[] = {           // <= 35 chars per line at scale 2
+        "SPACE PAUSE  . STEP  BRACKETS SPEED",
+        "M MONO  R RANDOM  C COLOR  T TRACER",
+        "+ - ADD/REMOVE  S SAVE  L LOAD",
+        "V RECORD  Q QUIT",
+        "MOUSE  L-DRAG LAUNCH  R-DRAG PUSH",
+        "       CTRL-CLICK PICK TRACER",
+    };
+    for (size_t k = 0; k < sizeof(keys) / sizeof(keys[0]); k++) {
+        if (ty + 12 > cfg.sim_h) break;
+        ds(rend, keys[k], px, ty, 2, 0x66, 0x77, 0x99); ty += 13;
+    }
 }
 
 // ── One full frame ────────────────────────────────────────────────────────────
@@ -1793,6 +2000,7 @@ static void render_frame(SDL_Renderer *rend, int n) {
     draw_particles(rend, n, max_val);
     draw_tracer(rend, n);
     draw_vessel(rend);
+    draw_mouse_tools(rend);
 
     double ke, pe;
     double te = compute_energy(n, &ke, &pe);
@@ -1816,7 +2024,7 @@ static void trail_push(int n) {
 // Matching the XDG convention: `make install` puts the pristine default in
 // share/, and the user copies it to ~/.config/ballsim/ to customise.
 #ifndef BALLSIM_VERSION
-#define BALLSIM_VERSION "2.1"
+#define BALLSIM_VERSION "2.2"
 #endif
 #ifndef DATADIR
 #define DATADIR ""
@@ -1867,7 +2075,20 @@ static void main_loop_iter(void) {
         while (SDL_PollEvent(&ev)) {
             if (ev.type == SDL_QUIT) L.running = false;
 
-            if (ev.type == SDL_MOUSEBUTTONDOWN && ev.button.button == SDL_BUTTON_LEFT) {
+            if (ev.type == SDL_MOUSEMOTION) { g_mouse_x = ev.motion.x; g_mouse_y = ev.motion.y; }
+
+            if (ev.type == SDL_MOUSEBUTTONDOWN && ev.button.x < cfg.sim_w) {
+                // ── Mouse tools in the simulation area ─────────────────────
+                bool ctrl = (SDL_GetModState() & KMOD_CTRL) != 0;
+                if (ev.button.button == SDL_BUTTON_LEFT && ctrl) {
+                    int k = nearest_particle(L.n, ev.button.x, ev.button.y, 40.0);
+                    if (k >= 0) { tracer_i = k; trail_head = trail_count = 0; set_status("TRACER SET"); }
+                } else if (ev.button.button == SDL_BUTTON_LEFT) {
+                    g_launch_drag = true; g_launch_x0 = ev.button.x; g_launch_y0 = ev.button.y;
+                } else if (ev.button.button == SDL_BUTTON_RIGHT) {
+                    g_push_drag = true;
+                }
+            } else if (ev.type == SDL_MOUSEBUTTONDOWN && ev.button.button == SDL_BUTTON_LEFT) {
                 int hit = slider_hit(ev.button.x, ev.button.y, g_slider_panel_top);
                 if (hit >= 0) {
                     active_slider = hit;
@@ -1876,8 +2097,20 @@ static void main_loop_iter(void) {
                     }
                 }
             }
-            if (ev.type == SDL_MOUSEBUTTONUP && ev.button.button == SDL_BUTTON_LEFT)
+            if (ev.type == SDL_MOUSEBUTTONUP && ev.button.button == SDL_BUTTON_LEFT) {
+                if (g_launch_drag) {
+                    g_launch_drag = false;
+                    if (L.n < MAX_PARTICLES) {
+                        double vx = (ev.button.x - g_launch_x0) * LAUNCH_GAIN;
+                        double vy = (ev.button.y - g_launch_y0) * LAUNCH_GAIN;
+                        spawn_at(L.n, g_launch_x0, g_launch_y0, vx, vy);
+                        L.n++; cfg.n_particles = L.n;
+                    } else set_status("MAX PARTICLES");
+                }
                 active_slider = -1;
+            }
+            if (ev.type == SDL_MOUSEBUTTONUP && ev.button.button == SDL_BUTTON_RIGHT)
+                g_push_drag = false;
             if (ev.type == SDL_MOUSEMOTION && active_slider >= 0) {
                 if (slider_set(active_slider, ev.motion.x, g_slider_panel_top)) {
                     L.n = cfg.n_particles; init_particles(L.n, true);
@@ -1901,6 +2134,21 @@ static void main_loop_iter(void) {
                     if (!rec_active) { record_start(L.rend); rec_blink = SDL_GetTicks(); }
                     else record_stop();
                     break;
+                case SDLK_SPACE:  g_paused = !g_paused; break;
+                case SDLK_PERIOD: g_step_once = true;   break;
+                case SDLK_LEFTBRACKET:
+                    g_time_scale = fmax(1.0 / 32.0, g_time_scale * 0.5); break;
+                case SDLK_RIGHTBRACKET:
+                    g_time_scale = fmin(4.0, g_time_scale * 2.0); break;
+                case SDLK_s:
+                    set_status(save_state(STATE_FILE, L.n) ? "SAVED " STATE_FILE : "SAVE FAILED");
+                    break;
+                case SDLK_l: {
+                    int k = load_state(STATE_FILE);
+                    if (k > 0) { L.n = k; set_status("LOADED " STATE_FILE); }
+                    else set_status("LOAD FAILED");
+                    break;
+                }
                 }
         }
 
@@ -1912,18 +2160,32 @@ static void main_loop_iter(void) {
         if (frame_time > 0)
             perf_fps = (perf_fps == 0) ? 1.0 / frame_time : 0.95 * perf_fps + 0.05 / frame_time;
 
+        // Pause / time scale / single step
+        if (g_paused) L.accumulator = 0.0;
+        else          L.accumulator -= frame_time * (1.0 - g_time_scale);   // scaled by g_time_scale
+        if (L.accumulator < 0) L.accumulator = 0;
+        int steps = 0;
         Uint64 pc0 = SDL_GetPerformanceCounter();
-        while (L.accumulator >= L.fixed_dt) {
-            step_sim(L.n, L.fixed_dt);
-            L.accumulator -= L.fixed_dt;
+        if (g_step_once) {
+            g_paused = true; g_step_once = false;
+            apply_push(L.n, L.fixed_dt);
+            step_sim(L.n, L.fixed_dt); steps = 1;
+        } else {
+            if (!g_paused) apply_push(L.n, frame_time * g_time_scale);
+            while (L.accumulator >= L.fixed_dt) {
+                step_sim(L.n, L.fixed_dt);
+                L.accumulator -= L.fixed_dt;
+                steps++;
+            }
         }
-        double ms = 1000.0 * (double)(SDL_GetPerformanceCounter() - pc0) / SDL_GetPerformanceFrequency();
-        perf_step_ms = 0.9 * perf_step_ms + 0.1 * ms;
-        trail_push(L.n);
-
-        if (t_now - L.t_last_samp >= SAMPLE_MS) {
-            sample_diagnostics(L.n);
-            L.t_last_samp = t_now;
+        if (steps > 0) {
+            double ms = 1000.0 * (double)(SDL_GetPerformanceCounter() - pc0) / SDL_GetPerformanceFrequency();
+            perf_step_ms = 0.9 * perf_step_ms + 0.1 * ms;
+            trail_push(L.n);
+            if (t_now - L.t_last_samp >= SAMPLE_MS || g_paused) {   // paused ⇒ a manual step: always sample
+                sample_diagnostics(L.n);
+                L.t_last_samp = t_now;
+            }
         }
 
         render_frame(L.rend, L.n);
@@ -1944,7 +2206,9 @@ static void usage(void) {
            "  --substeps K           Verlet sub-steps per 1/120 s (default %d)\n"
            "  --passes P             resolution passes per sub-step (default %d)\n"
            "  --threads T            OpenMP thread count\n"
-           "  --seed S               RNG seed (default: time)\n"
+           "  --seed S               RNG seed (default: time; printed at start)\n"
+           "  --load FILE            start from a saved state (see S / L keys)\n"
+           "  --save FILE            write the state on exit\n"
            "  --version              print version and exit\n"
            "Config search order without --config: ./" CFG_NAME ", "
            "$XDG_CONFIG_HOME/ballsim/, $XDG_DATA_HOME/ballsim/%s%s\n",
@@ -1957,6 +2221,7 @@ int main(int argc, char **argv) {
     const char *shot_path = NULL;
     int bench_n = 0, bench_steps = 0, shot_steps = 0, max_frames = 0;
     unsigned seed = (unsigned)time(NULL);
+    const char *load_path = NULL, *save_path = NULL;
     bool write_cfg = false; const char *write_path = "ballsim_v2.cfg";
 
     for (int i = 1; i < argc; i++) {
@@ -1975,6 +2240,8 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[i], "--passes")   && i + 1 < argc) g_passes   = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--seed")     && i + 1 < argc) seed = (unsigned)atoi(argv[++i]);
         else if (!strcmp(argv[i], "--frames")   && i + 1 < argc) max_frames = atoi(argv[++i]); // test: quit after K frames
+        else if (!strcmp(argv[i], "--load")     && i + 1 < argc) load_path = argv[++i];
+        else if (!strcmp(argv[i], "--save")     && i + 1 < argc) save_path = argv[++i];
         else if (!strcmp(argv[i], "--threads")  && i + 1 < argc) {
 #ifdef _OPENMP
             omp_set_num_threads(atoi(argv[++i]));
@@ -1989,6 +2256,8 @@ int main(int argc, char **argv) {
     if (g_substeps < 1) g_substeps = 1;
     if (g_passes < 1)   g_passes   = 1;
     srand(seed);
+    g_seed = seed;
+    fprintf(stderr, "seed %u\n", seed);
 
     if (write_cfg) { config_derive(); write_default_config(write_path); return 0; }
 #ifdef __EMSCRIPTEN__
@@ -2000,7 +2269,7 @@ int main(int argc, char **argv) {
 #endif
     config_derive();
 
-    if (bench_n > 0 && bench_steps > 0) return run_bench(bench_n, bench_steps);
+    if (bench_n > 0 && bench_steps > 0) { g_bench_save = save_path; return run_bench(bench_n, bench_steps); }
 
     cell_list_init();
 #ifdef _OPENMP
@@ -2050,6 +2319,12 @@ int main(int argc, char **argv) {
 
     int n = cfg.n_particles;
     init_particles(n, true);
+    if (load_path) {
+        int k = load_state(load_path);
+        if (k < 0) { fprintf(stderr, "Cannot load state '%s'\n", load_path); return 1; }
+        n = k;
+        fprintf(stderr, "Loaded %d particles from '%s' (t = %.3f s)\n", n, load_path, sim_time);
+    }
     sliders_init();
     const double FIXED_DT = 1.0 / 120.0;
 
@@ -2085,6 +2360,10 @@ int main(int argc, char **argv) {
 #endif
 
     record_stop();
+    if (save_path) {
+        if (save_state(save_path, L.n)) fprintf(stderr, "Saved state to '%s'\n", save_path);
+        else fprintf(stderr, "Cannot save state to '%s'\n", save_path);
+    }
     SDL_DestroyTexture(g_sprite);
     SDL_DestroyRenderer(rend);
     SDL_DestroyWindow(win);
