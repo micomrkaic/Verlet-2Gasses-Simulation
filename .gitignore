@@ -63,9 +63,6 @@ ballsim_v2
 ballsim.html
 ballsim.js
 ballsim.wasm
-index.html
-index.js
-index.wasm
 dist/
 *.zip
 ballsim
@@ -76,6 +73,6 @@ ballsim_v2
 ballsim.html
 ballsim.js
 ballsim.wasm
-index.*
 dist/
 *.zip
+dist/
