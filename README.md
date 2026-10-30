@@ -7,8 +7,9 @@ species, barometric density profiles, the Boltzmann H-theorem, hard-disc
 equations of state, and piston work via an oscillating ceiling. Supports
 video export to MP4.
 
-**[▶ Play in browser](https://micomrkaic.itch.io/two-d-gas-box-with-verlet)**
-(WebAssembly build of v1 on itch.io)
+**[▶ Run it in your browser](https://micomrkaic.github.io/Verlet-2Gasses-Simulation/)**
+— v2 at the root, [v1](https://micomrkaic.github.io/Verlet-2Gasses-Simulation/v1.html)
+alongside. WebAssembly, served from this repo's `docs/` via GitHub Pages.
 
 ---
 
@@ -187,18 +188,41 @@ Make sure `~/.local/bin` is on your `PATH`; `man` normally derives its search
 path from `PATH`, so `man ballsim_v2` then works too (otherwise add
 `~/.local/share/man` to `MANPATH`). v1 (`ballsim`) only reads `./ballsim.cfg`.
 
-### WebAssembly (itch.io / browser) — v1 physics
+### WebAssembly — GitHub Pages
+
+`ballsim_v2.c` builds for the browser as-is (`#ifdef __EMSCRIPTEN__` guards
+swap in a `requestAnimationFrame` loop, the 2D-canvas software renderer, and
+no recording/config file). WASM is single-threaded, so expect roughly the
+single-core numbers from the benchmark table.
+
+The site is the `docs/` folder of this repo, served by GitHub Pages
+(Settings → Pages → Source: *Deploy from a branch*, `main`, `/docs`). It
+contains `index.*` (v2), `v1.*` (v1) and `.nojekyll`. Requires
+[Emscripten](https://emscripten.org/docs/getting_started/downloads.html):
 
 ```bash
 source /path/to/emsdk/emsdk_env.sh
-make -f Makefile.emscripten
-python3 -m http.server 8080     # open http://localhost:8080/ballsim.html
-mv ballsim.html index.html; mv ballsim.js index.js; mv ballsim.wasm index.wasm
-zip ballsim.zip index.html index.js index.wasm
+make -f Makefile.emscripten publish      # build both → stage into docs/
+git add docs && git commit -m "Pages: rebuild" && git push
 ```
 
-Upload to itch.io as an HTML project, embed size **980 × 960**, and enable
-SharedArrayBuffer support.
+Pages redeploys within a minute of the push. For a local check first:
+
+```bash
+make -f Makefile.emscripten               # dev build: ballsim.html/.js/.wasm
+python3 -m http.server 8080               # open http://localhost:8080/ballsim.html
+```
+
+Notes:
+
+- Emscripten hard-codes the `.js` filename into the `.html`, so never rename
+  the output by hand — the targets build each page with its final name.
+- `shell.html` is the landing page (header, v1/v2 links, key hints). To use
+  Emscripten's plain default page instead: `make -f Makefile.emscripten pages PLAIN=1`.
+- Keep `emsdk` current (`./emsdk install latest && ./emsdk activate latest`):
+  runtimes before ~3.1.60 crash in current Chrome with a growable heap.
+- The same `dist/` zipped (`cd dist && zip ../ballsim.zip *`) also works on
+  itch.io as an HTML project, embed size 1280 × 960.
 
 ---
 
@@ -318,7 +342,7 @@ in the WASM build.
 .
 ├── verlet_collisions_two_gasses_video.c   ← v1 source (event-driven, untouched)
 ├── ballsim_v2.c                           ← v2.1 source (cell-list MD + OpenMP + analysis)
-├── ballsim_wasm.c                         ← WASM source (v1 physics, browser build)
+├── ballsim_wasm.c                         ← v1 for the browser (v2 builds from ballsim_v2.c directly)
 ├── Makefile                               ← builds v1 + v2; `make bench`, `make install`
 ├── ballsim_v2.1                           ← man page (troff)
 ├── Makefile.emscripten                    ← builds WASM with emcc
