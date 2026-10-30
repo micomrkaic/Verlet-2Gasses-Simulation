@@ -7,11 +7,9 @@ TARGET  = ballsim.html   # local dev: also emits ballsim.js + ballsim.wasm
 #   resizable ArrayBuffer in Chrome >= 111, and older Emscripten runtimes'
 #   TextDecoder.decode() throws on it ("must not be resizable").  The sim's
 #   memory use is static (<= 500 particles), so a fixed 64 MB heap is plenty.
-#   TEXTDECODER=0 avoids the same trap on any other path.
 EMFLAGS = \
 	-s USE_SDL=2 \
 	-s INITIAL_MEMORY=67108864 \
-	-s TEXTDECODER=0 \
 	-s EXIT_RUNTIME=0
 
 CFLAGS  = -O2 -std=c11 -Wall -Wextra -Wno-unused-parameter $(EMFLAGS)
