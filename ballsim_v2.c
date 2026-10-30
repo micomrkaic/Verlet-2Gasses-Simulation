@@ -2008,13 +2008,26 @@ int main(int argc, char **argv) {
 #endif
 
     if (shot_path || max_frames > 0) SDL_SetHint("SDL_VIDEODRIVER", "dummy");
+#ifdef __EMSCRIPTEN__
+    SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "0");   // nearest: keep the pixel font crisp
+#else
     SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "1");
+#endif
     if (SDL_Init(SDL_INIT_VIDEO) != 0) {
         fprintf(stderr, "SDL: %s\n", SDL_GetError());
         return 1;
     }
     bool headless = shot_path || max_frames > 0;
+#ifdef __EMSCRIPTEN__
+    // No ALLOW_HIGHDPI in the browser: Emscripten's SDL would size the canvas
+    // backing store by devicePixelRatio -- including ratios < 1 (browser zoomed
+    // out), which renders the pixel font into fewer pixels than it has.  A fixed
+    // 1280x960 backing store, scaled by the browser with image-rendering:
+    // pixelated, stays legible at every zoom level.
+    Uint32 wflags = headless ? SDL_WINDOW_HIDDEN : SDL_WINDOW_SHOWN;
+#else
     Uint32 wflags = SDL_WINDOW_ALLOW_HIGHDPI | (headless ? SDL_WINDOW_HIDDEN : SDL_WINDOW_SHOWN);
+#endif
     SDL_Window *win = SDL_CreateWindow(
         "Parabolic Vessel \xe2\x80\x94 Hard Sphere Gas  [v2.1 cell-list MD]",
         SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, CFG_WIN_W, cfg.sim_h, wflags);
