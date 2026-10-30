@@ -17,8 +17,12 @@
     nav a { color: #4488cc; text-decoration: none; font-size: 12px; letter-spacing: .06em; }
     nav a:hover { text-decoration: underline; }
     nav a + a { margin-left: 14px; }
-    #wrap { position: relative; border: 1px solid #1e2a40; box-shadow: 0 0 40px #0a1020; line-height: 0; max-width: 100%; }
-    canvas { display: block; max-width: 100%; height: auto; image-rendering: pixelated; }
+    /* The simulation is drawn at 1280x960 with a 3x5-pixel font: it must be
+       shown 1:1, never scaled down.  On a narrower window the frame scrolls
+       sideways; browser zoom (Ctrl +/-) scales it crisply if wanted. */
+    #wrap { position: relative; border: 1px solid #1e2a40; box-shadow: 0 0 40px #0a1020;
+            line-height: 0; max-width: 100%; overflow: auto; }
+    canvas { display: block; image-rendering: pixelated; }
     #overlay {
       position: absolute; inset: 0; background: #0d0f1a; display: flex; flex-direction: column;
       align-items: center; justify-content: center; gap: 18px; transition: opacity .4s; line-height: 1.4;
@@ -56,7 +60,8 @@
     <kbd>M</kbd> monoenergetic reset &nbsp; <kbd>R</kbd> random reset &nbsp;
     <kbd>C</kbd> colour mode &nbsp; <kbd>T</kbd> reset tracer/MSD &nbsp;
     <kbd>+</kbd>/<kbd>&minus;</kbd> add/remove particle<br>
-    click the canvas first so it receives keys &middot; drag the sliders in the panel
+    click the canvas first so it receives keys &middot; drag the sliders in the panel &middot;
+    window narrower than 1280 px? scroll sideways or zoom out
   </div>
 
   <footer>Mico Mrkaic &middot; C / SDL2 / WebAssembly &middot; runs entirely in your browser</footer>
